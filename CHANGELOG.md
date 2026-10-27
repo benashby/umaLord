@@ -4,6 +4,11 @@ What changed in each release. Releases are built from the tagged source by GitHu
 
 ## [Unreleased]
 
+### Added
+
+- Builds and runs on Linux (Wayland) and macOS from source, tested in CI on all three. Settings live in the platform's own folder, times show in your local time zone, and the Ask tab uses `opencode` from your PATH.
+- The app bundles small symbol fonts, so every icon draws whatever fonts the system has.
+
 ### Fixed
 
 - The planner's Upcoming CM legend puts ✔ announced and ? estimated on their own lines instead of wrapping mid-phrase.

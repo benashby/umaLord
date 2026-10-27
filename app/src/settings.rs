@@ -1,11 +1,33 @@
-//! Per-user settings in %APPDATA%\umaLord\settings.json (theme, saved API key).
+//! Per-user settings in %APPDATA%\umaLord\settings.json (theme, saved API key), in
+//! `~/Library/Application Support/umaLord` on macOS, and `$XDG_CONFIG_HOME/umaLord`
+//! (`~/.config/umaLord`) elsewhere.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 
+/// The per-user folder for settings, the live-data cache and the assistant's bridge.
+pub fn app_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library").join("Application Support"));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+    base.map(|d| d.join("umaLord"))
+}
+
+/// A folder in the user's home, like Downloads or Pictures (`%USERPROFILE%\<name>` on Windows).
+pub fn user_dir(name: &str) -> Option<PathBuf> {
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(home).map(|h| PathBuf::from(h).join(name))
+}
+
 pub fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("umaLord").join("settings.json"))
+    app_dir().map(|d| d.join("settings.json"))
 }
 
 fn read_all() -> Value {

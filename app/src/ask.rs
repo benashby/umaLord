@@ -285,6 +285,20 @@ pub(crate) fn hidden(cmd: &mut std::process::Command) -> &mut std::process::Comm
     cmd
 }
 
+/// Windows ships curl.exe since Windows 10 1803; elsewhere it's `curl` on PATH.
+pub(crate) const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
+
+/// Write a file only this user can read: the temp folder is per-user on Windows, but /tmp is
+/// shared, and the header file holds the API key.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(bytes)
+}
+
 fn ant_token() -> Option<String> {
     let out = hidden(std::process::Command::new("ant").args(["auth", "print-credentials", "--access-token"])).output().ok()?;
     let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
@@ -431,7 +445,7 @@ impl Acc {
     }
 }
 
-/// POST the body with curl.exe and stream the answer back. Headers go through a temp file so the
+/// POST the body with curl and stream the answer back. Headers go through a temp file so the
 /// key isn't on a command line.
 fn stream_request(body: Value, auth: Auth, betas: Vec<&'static str>, child: Arc<Mutex<Option<Child>>>, tx: Sender<StreamEvent>, wake: impl Fn() + Send + 'static) {
     std::thread::spawn(move || {
@@ -457,14 +471,14 @@ fn stream_request(body: Value, auth: Auth, betas: Vec<&'static str>, child: Arc<
         }
         let result = (|| -> Result<Value, String> {
             std::fs::write(&body_path, body.to_string()).map_err(|e| e.to_string())?;
-            std::fs::write(&head_path, headers.join("\n")).map_err(|e| e.to_string())?;
-            let mut cmd = std::process::Command::new("curl.exe");
+            write_private(&head_path, headers.join("\n").as_bytes()).map_err(|e| e.to_string())?;
+            let mut cmd = std::process::Command::new(CURL);
             cmd.args(["-sS", "-N", "--max-time", "900", "-X", "POST", API_URL, "-H", &format!("@{}", head_path.display()), "--data-binary", &format!("@{}", body_path.display()), "-w", "\n%{http_code}"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             hidden(&mut cmd);
-            let mut proc = cmd.spawn().map_err(|e| format!("couldn't run curl.exe: {e}"))?;
+            let mut proc = cmd.spawn().map_err(|e| format!("couldn't run {CURL}: {e}"))?;
             let stdout = proc.stdout.take();
             let mut stderr = proc.stderr.take();
             *child.lock().unwrap_or_else(|p| p.into_inner()) = Some(proc);
@@ -962,7 +976,7 @@ impl App {
 
     fn send_opencode(&mut self, ctx: &egui::Context, q: String) {
         let (Some(exe), Some(root)) = (self.ask.oc.exe.clone(), self.root.clone()) else {
-            self.ask.status = Some(("OpenCode isn't installed: tools/opencode/opencode.exe is missing.".into(), true));
+            self.ask.status = Some(("OpenCode isn't installed: it isn't in tools/opencode or on PATH.".into(), true));
             return;
         };
         self.write_digest();
@@ -1090,6 +1104,13 @@ impl App {
         ui.label(semibold("OpenCode isn't installed yet", 16.0));
         ui.label(RichText::new("It answers your questions for free, with no key and no account.").color(p.weak));
         ui.add_space(6.0);
+        // The pinned download is the Windows build; elsewhere OpenCode comes from the package
+        // manager (it's in the Nix dev shell) and `find_exe` picks it up from PATH.
+        if !cfg!(windows) {
+            ui.label("Install `opencode` with your package manager so it's on PATH, then restart umaLord.");
+            ui.label(RichText::new("With Nix: it's in this repo's dev shell (nix develop), or run nix shell nixpkgs#opencode.").size(11.5).color(p.weak));
+            return;
+        }
         if self.ask.oc.install_rx.is_some() {
             let done = self.ask.oc.install_progress;
             let bar = egui::ProgressBar::new((done as f32 / ZIP_SIZE as f32).min(1.0))
@@ -1630,7 +1651,7 @@ impl App {
             crate::settings::set("api_key", Value::Null);
             s.saved_key = None;
         }
-        ui.label(RichText::new("Get a key at console.anthropic.com. Saved keys are stored in plain text under %APPDATA%\\umaLord.").size(11.5).color(p.weak));
+        ui.label(RichText::new("Get a key at console.anthropic.com. Saved keys are stored in plain text in your umaLord settings folder.").size(11.5).color(p.weak));
     }
 
     /// Settings → AI assistant: which writes may happen without the approval card.

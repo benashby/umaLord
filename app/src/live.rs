@@ -1,6 +1,6 @@
 //! Live event data, fetched in the background on launch: the official Global news feed
 //! (umamusume.com) and Moomoolator's event presets (umalator.app). Cached per user in
-//! `%APPDATA%\umaLord\cache\events.json`. For dates, conditions and disabled skills the official
+//! `%APPDATA%\umaLord\cache\events.json` (`~/.config/umaLord/cache` off Windows). For dates, conditions and disabled skills the official
 //! announcement wins over Umalator's guess, which wins over the bundled
 //! `knowledge/data/umalator.json`; Umalator gives the exact course (inner or outer layout).
 
@@ -178,7 +178,7 @@ pub fn now() -> i64 {
 }
 
 /// A time in this computer's time zone (daylight saving for that date included):
-/// (year, month, day, hour, minute, weekday 0 = Sunday). Falls back to UTC off Windows.
+/// (year, month, day, hour, minute, weekday 0 = Sunday). Falls back to UTC if the system can't say.
 pub fn local(t: i64) -> (i64, u32, u32, u32, u32, u32) {
     let utc = || {
         let days = t.div_euclid(86_400);
@@ -212,6 +212,38 @@ pub fn local(t: i64) -> (i64, u32, u32, u32, u32, u32) {
         let ok = unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &input, &mut out) };
         if ok != 0 {
             return (i64::from(out.year), u32::from(out.month), u32::from(out.day), u32::from(out.hour), u32::from(out.minute), u32::from(out.weekday));
+        }
+    }
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    {
+        /// POSIX `struct tm` as glibc, musl and macOS lay it out on 64-bit targets.
+        #[repr(C)]
+        struct Tm {
+            sec: i32,
+            min: i32,
+            hour: i32,
+            mday: i32,
+            mon: i32,
+            year: i32,
+            wday: i32,
+            yday: i32,
+            isdst: i32,
+            gmtoff: i64,
+            zone: *const std::ffi::c_char,
+        }
+        unsafe extern "C" {
+            fn tzset();
+            fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm;
+        }
+        let mut out = Tm { sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: std::ptr::null() };
+        // SAFETY: `t` and `out` live for the call; tzset reads TZ (or /etc/localtime) first, which
+        // localtime_r isn't required to do itself.
+        let ok = unsafe {
+            tzset();
+            !localtime_r(&t, &mut out).is_null()
+        };
+        if ok {
+            return (i64::from(out.year) + 1900, (out.mon + 1) as u32, out.mday as u32, out.hour as u32, out.min as u32, out.wday as u32);
         }
     }
     utc()
@@ -852,15 +884,15 @@ pub fn merge(kb: &Knowledge, bundled: &[EventPreset], live: &LiveData) -> Vec<Ev
 // ---------------------------------------------------------------------------
 // Fetching and the cache
 
-/// GET (or POST `body` as JSON) with Windows' curl.exe: no TLS crates needed.
+/// GET (or POST `body` as JSON) with curl (Windows ships curl.exe): no TLS crates needed.
 fn fetch(url: &str, body: Option<&str>) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("curl.exe");
+    let mut cmd = std::process::Command::new(crate::ask::CURL);
     cmd.args(["-sSfL", "--max-time", "15", "-A", &format!("umaLord/{}", env!("CARGO_PKG_VERSION"))]);
     if let Some(b) = body {
         cmd.args(["-H", "Content-Type: application/json", "--data-raw", b]);
     }
     cmd.arg(url);
-    let out = crate::ask::hidden(&mut cmd).output().map_err(|e| format!("couldn't run curl.exe: {e}"))?;
+    let out = crate::ask::hidden(&mut cmd).output().map_err(|e| format!("couldn't run {}: {e}", crate::ask::CURL))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if err.is_empty() { "no answer".into() } else { err.trim_start_matches("curl: ").to_string() });

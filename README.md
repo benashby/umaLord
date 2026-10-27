@@ -119,6 +119,8 @@ cargo build --release
 
 The exe is `app/target/release/umalord.exe`. `cargo test --release` runs the tests, including a check of the race engine against umalator.app.
 
+**Linux (Wayland) and macOS:** build it the same way with the standard Rust toolchain (`cargo build --release` in `app/`, then `cargo run --release`). Linux needs a Wayland session and `curl`, `xdg-open` and fontconfig; the app bundles its symbol fonts, and a Japanese font (such as Noto Sans CJK JP) shows event text. Settings live in `~/.config/umaLord` on Linux and `~/Library/Application Support/umaLord` on macOS. The Ask tab's free backend uses `opencode` from your PATH there, since the in-app download is the Windows build. CI builds and tests all three; macOS hasn't been tried on a real Mac yet.
+
 Game data lives in `knowledge/data/`. To refresh it from uma.guide, umalator.app, the meta sheet and the skill tier list (needs Python 3):
 
 ```powershell

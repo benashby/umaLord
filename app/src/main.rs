@@ -113,6 +113,9 @@ fn main() -> eframe::Result {
         .unwrap_or([1400.0, 900.0]);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("umaLord")
+        // Wayland matches the window to umalord.desktop (and its icon) by this id; it ignores
+        // with_icon.
+        .with_app_id("umalord")
         .with_inner_size(size)
         .with_min_inner_size([960.0, 600.0]);
     if let Some(icon) = window_icon() {
@@ -1187,14 +1190,9 @@ impl App {
             }
         }
         match ui_util::show_toasts(ctx) {
-            // Show the file selected in Explorer (or open a folder).
+            // Show the file selected in the file manager (or open a folder).
             Some(ui_util::ToastAction::Open(path)) => {
-                let result = if path.is_dir() {
-                    std::process::Command::new("explorer").arg(&path).spawn()
-                } else {
-                    std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn()
-                };
-                if let Err(e) = result {
+                if let Err(e) = ui_util::show_in_folder(&path) {
                     self.toast(format!("Couldn't open {}: {e}", path.display()), ui_util::ToastKind::Error);
                 }
             }
@@ -1657,7 +1655,7 @@ impl App {
     /// One frame of the whole window; separate from eframe so tests can time it headless.
     fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        // System mode follows Windows, so what "dark" means can change while the app runs.
+        // System mode follows the OS, so what "dark" means can change while the app runs.
         self.dark = theme::is_dark(&ctx);
         ui_util::set_pose(self.pose());
         self.shortcuts(&ctx);
