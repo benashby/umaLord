@@ -372,7 +372,7 @@ impl App {
                 Some(root) => {
                     ui.label(RichText::new(root.display().to_string()).monospace().size(size::SM));
                     if ui.button("📂 Open folder").clicked() {
-                        let _ = std::process::Command::new("explorer").arg(root).spawn();
+                        let _ = crate::ui_util::show_in_folder(root);
                     }
                 }
                 None => _ = ui.label(RichText::new("The umaLord folder wasn't found.").color(p.warn)),
@@ -428,7 +428,7 @@ impl App {
     pub(crate) fn mode_picker(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let options = [
-            (theme::Mode::System, theme::Mode::System.label(), "Follow Windows: dark when Windows is dark"),
+            (theme::Mode::System, theme::Mode::System.label(), "Follow the system: dark when your computer is dark"),
             (theme::Mode::Light, theme::Mode::Light.label(), ""),
             (theme::Mode::Dark, theme::Mode::Dark.label(), ""),
         ];
@@ -635,8 +635,8 @@ impl App {
                 .color(p.weak),
         );
         ui.add_space(4.0);
-        command_line(ui, "python -I -X utf8 tools\\update_knowledge.py");
-        command_line(ui, "python -I -X utf8 tools\\update_knowledge.py --only meta");
+        command_line(ui, "python -I -X utf8 tools/update_knowledge.py");
+        command_line(ui, "python -I -X utf8 tools/update_knowledge.py --only meta");
         heading(ui, "Advanced");
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new("📝 Browse notes and data files").min_size(vec2(0.0, 30.0))).on_hover_text("Read the markdown files in this folder: insights, plans, results, your roster files and the knowledge notes").clicked() {
@@ -646,7 +646,7 @@ impl App {
             if let Some(root) = &self.root
                 && ui.add(egui::Button::new("📂 Open the game data folder").min_size(vec2(0.0, 30.0))).clicked()
             {
-                let _ = std::process::Command::new("explorer").arg(root.join("knowledge").join("data")).spawn();
+                let _ = crate::ui_util::show_in_folder(&root.join("knowledge").join("data"));
             }
         });
     }

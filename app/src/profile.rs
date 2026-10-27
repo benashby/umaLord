@@ -238,8 +238,8 @@ pub fn import(root: &Path, p: &Profile, now: &str) -> Result<Option<PathBuf>, St
 /// Profile files to offer: in `profiles/`, its backups and the Downloads folder, newest first.
 pub fn find(root: &Path) -> Vec<(PathBuf, Result<Profile, String>)> {
     let mut dirs = vec![root.join(DIR), root.join(DIR).join("backups")];
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        dirs.push(PathBuf::from(home).join("Downloads"));
+    if let Some(downloads) = crate::settings::user_dir("Downloads") {
+        dirs.push(downloads);
     }
     let mut out: Vec<(PathBuf, std::time::SystemTime)> = dirs
         .iter()

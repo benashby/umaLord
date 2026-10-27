@@ -615,8 +615,9 @@ mod tests {
         for sym in ["⍟", "◎", "◯", "▲", "△", "✕"] {
             assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, sym)), "no glyph for the tier mark {sym}");
         }
-        // The check can tell: the compass drew as an empty box.
-        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&font, "🧭")));
+        // The check can tell: a private-use code point no font draws. (It was 🧭, an empty box with
+        // Windows' fonts, until Linux's Noto Emoji turned out to have it.)
+        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&font, "\u{10FFFD}")));
     }
 
     #[test]

@@ -774,7 +774,7 @@ impl App {
                 {
                     let dir = root.join(profile::DIR);
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("explorer.exe").arg(&dir).spawn();
+                    let _ = crate::ui_util::show_in_folder(&dir);
                 }
                 if ui.button("🔄 Look again").clicked() {
                     self.onboarding.found = None;

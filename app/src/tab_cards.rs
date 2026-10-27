@@ -1298,7 +1298,7 @@ impl App {
                 let path = dir.join(format!("{id}.webp"));
                 let part = dir.join(format!("{id}.webp.part"));
                 let url = format!("https://uma.guide/img/card/composite/tex_support_card_{id}_thumb.webp");
-                let mut cmd = std::process::Command::new("curl.exe");
+                let mut cmd = std::process::Command::new(crate::ask::CURL);
                 cmd.args(["-sSfL", "--max-time", "60", "-o"]).arg(&part).arg(&url);
                 crate::ask::hidden(&mut cmd);
                 let ok = cmd.status().is_ok_and(|s| s.success())
