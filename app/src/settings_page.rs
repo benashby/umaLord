@@ -29,7 +29,7 @@ impl SettingsPage {
             SettingsPage::Profile => ("👤", "Profile", "Whose account this is, and saving, loading or emptying it."),
             SettingsPage::Appearance => ("🎨", "Appearance", "Dark or light, the colour theme, Seiun Sky, and the size of everything."),
             SettingsPage::Data => ("🗂", "Data and updates", "Where the game data comes from, how old it is, and how to refresh it."),
-            SettingsPage::Ai => ("💬", "AI assistant", "Who answers on the Ask tab: a free model through OpenCode, or Claude with your key."),
+            SettingsPage::Ai => ("💬", "AI assistant", "Who answers on the Ask tab: a free model through OpenCode, or Claude with your Claude account or an API key."),
             SettingsPage::About => ("ℹ", "About", "Version, credits, license and keyboard shortcuts."),
         }
     }
@@ -663,10 +663,14 @@ impl App {
         setting_row(ui, "Answered by", "Who answers your questions on the Ask tab.", |ui| {
             let options = [
                 (crate::ask::Backend::OpenCode, "🆓 OpenCode · free models", "Free models through OpenCode. No account or key; weaker than Claude."),
-                (crate::ask::Backend::ClaudeApi, "🔑 Claude API · your key", "Claude with your own Anthropic API key; use is billed to that key."),
+                (crate::ask::Backend::ClaudeApi, "✳ Claude · your account or key", "Claude, through Claude Code with your Claude account or a setup token, or with an Anthropic API key billed per use."),
             ];
             ui.add_enabled_ui(!busy, |ui| {
-                if let Some(b) = big_choice(ui, self.ask.backend, &options) {
+                if let Some(b) = big_choice(ui, self.ask.backend, &options)
+                    && b != self.ask.backend
+                {
+                    // Each backend keeps its own sessions; the next question starts a fresh one.
+                    self.ask.end_process();
                     self.ask.backend = b;
                     settings::set("ask_backend", serde_json::json!(if b == crate::ask::Backend::OpenCode { "opencode" } else { "claude_api" }));
                 }

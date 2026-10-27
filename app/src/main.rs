@@ -7,6 +7,7 @@
 
 mod agent;
 mod ask;
+mod ask_claude_code;
 mod ask_opencode;
 mod career;
 mod data;
@@ -1014,8 +1015,9 @@ impl App {
             return None;
         }
         let path = self.root.as_ref()?.join("app").join("assets").join(sub).join(format!("{id}.webp"));
-        // file:///C:/… on Windows, file:///home/… elsewhere.
-        let path = path.to_string_lossy().replace('\\', "/");
+        // file:///C:/… on Windows, file:///home/… elsewhere; a folder given as `.` must not
+        // become file:///./….
+        let path = std::path::absolute(&path).unwrap_or(path).to_string_lossy().replace('\\', "/");
         Some(format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" }))
     }
 

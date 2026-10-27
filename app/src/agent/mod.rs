@@ -602,7 +602,8 @@ mod tests {
         crate::theme::install(&ctx, crate::theme::Mode::Dark);
         let _ = crate::ui_util::test_frame(&ctx, Default::default(), |_| {});
         let font = egui::FontId::proportional(14.0);
-        let extra = ["💭", "✳", "✔", "✖", "↶", "🔧", "📋", "■", "➤", "⚠", "★"];
+        // 🗐 is egui_commonmark's copy button on code blocks in answers.
+        let extra = ["💭", "✳", "✔", "✖", "↶", "🔧", "📋", "■", "➤", "⚠", "★", "🗐"];
         let missing: Vec<String> = registry()
             .iter()
             .map(|s| s.icon)
