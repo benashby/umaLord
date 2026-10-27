@@ -293,9 +293,16 @@ impl AskState {
         self.oc.session = None;
         self.oc.shown.clear();
         self.oc.draft_seen = None;
-        // Claude Code's warm process belongs to the conversation.
-        if let Some(mut c) = self.oc.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            let _ = c.kill();
+        self.end_process();
+    }
+
+    /// End the conversation's assistant process (Claude Code keeps one warm between questions)
+    /// and forget its session, which belongs to that backend: after a backend switch or a new
+    /// conversation the next question starts fresh.
+    pub(crate) fn end_process(&mut self) {
+        self.oc.session = None;
+        if let Some(c) = self.oc.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            crate::ask_claude_code::kill(c);
         }
     }
 }
@@ -930,8 +937,8 @@ impl App {
             }
             self.ask.messages.push(json!({"role": "user", "content": results}));
         }
-        if let Some(mut child) = self.ask.oc.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            let _ = child.kill();
+        if let Some(child) = self.ask.oc.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            crate::ask_claude_code::kill(child);
         }
         self.ask.status = Some(("Stopped.".into(), true));
         self.finish_question(ctx);
@@ -1011,7 +1018,12 @@ impl App {
         let claude = self.ask.via_claude_code();
         let exe = if claude { self.ask.oc.claude_exe.clone() } else { self.ask.oc.exe.clone() };
         let (Some(exe), Some(root)) = (exe, self.root.clone()) else {
-            self.ask.status = Some(("OpenCode isn't installed: it isn't in tools/opencode or on PATH.".into(), true));
+            let msg = match (self.root.is_some(), claude) {
+                (false, _) => "The umaLord folder wasn't found, so the assistant has nothing to read.",
+                (true, true) => "Claude Code isn't installed: claude isn't on PATH.",
+                (true, false) => "OpenCode isn't installed: it isn't in tools/opencode or on PATH.",
+            };
+            self.ask.status = Some((msg.into(), true));
             return;
         };
         self.write_digest();
@@ -1623,7 +1635,7 @@ impl App {
         if s.backend == Backend::OpenCode {
             ui.label(RichText::new("Free models cost nothing; the count is for interest.").size(11.5).color(p.weak));
         } else if s.via_claude_code() && !matches!(crate::ask_claude_code::Credential::from_key(s.claude_key().as_deref()), crate::ask_claude_code::Credential::ApiKey(_)) {
-            ui.label(RichText::new("With a Claude login or setup token, this counts against your Claude plan's usage, not a bill.").size(11.5).color(p.weak));
+            ui.label(RichText::new("On a Claude Pro or Max login or setup token, this counts against your plan's usage; a Console login is billed per use.").size(11.5).color(p.weak));
         }
         if ui.add_enabled(!busy, egui::Button::new("🗑 New conversation")).clicked() {
             s.clear();
@@ -1724,7 +1736,11 @@ impl App {
             ui.add_space(4.0);
         }
         ui.add(egui::TextEdit::singleline(&mut s.key_input).password(true).hint_text("sk-ant-api… or sk-ant-oat…").desired_width(f32::INFINITY));
-        if crate::ask_claude_code::is_setup_token(&typed) {
+        let env_key = std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.trim().is_empty());
+        let shown = if typed.is_empty() { s.saved_key.clone().unwrap_or_default() } else { typed.clone() };
+        if env_key && !typed.is_empty() {
+            ui.label(RichText::new("ANTHROPIC_API_KEY is set in the environment, so it's used instead of what you paste here.").size(12.0).color(pal(ui).warn));
+        } else if crate::ask_claude_code::is_setup_token(&shown) {
             let (text, color) = if s.oc.claude_exe.is_some() {
                 ("That's a setup token: umaLord hands it to Claude Code, which runs on your Claude account.", p.weak)
             } else {
@@ -1759,16 +1775,16 @@ impl App {
     /// Whether Claude Code is installed, which lets Claude run on a Claude account.
     fn claude_code_status(ui: &mut egui::Ui, s: &mut AskState) {
         let p = pal(ui);
+        let busy = s.oc.rx.is_some() || s.stream.is_some();
         ui.horizontal_wrapped(|ui| {
             match &s.oc.claude_exe {
                 Some(exe) => _ = ui.label(RichText::new("✳ Claude Code found: questions run through it.").size(12.5)).on_hover_text(exe.display().to_string()),
                 None => _ = ui.label(RichText::new("Claude Code isn't installed, so only an API key works. Install it from claude.com/claude-code to use your Claude account.").size(12.5).color(p.warn)),
             }
-            if ui.small_btn("🔄 Look again").on_hover_text("Check PATH for claude again, after installing it").clicked() {
+            let look = ui.add_enabled(!busy, egui::Button::new("🔄 Look again").small()).on_hover_text("Check PATH for claude again, after installing it").on_disabled_hover_text("Wait for the answer to finish");
+            if look.clicked() {
                 s.oc.claude_exe = crate::ask_claude_code::find_exe();
-                if let Some(mut c) = s.oc.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                    let _ = c.kill();
-                }
+                s.end_process();
             }
         });
         ui.add_space(4.0);

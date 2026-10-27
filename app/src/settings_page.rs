@@ -666,7 +666,11 @@ impl App {
                 (crate::ask::Backend::ClaudeApi, "✳ Claude · your account or key", "Claude, through Claude Code with your Claude account or a setup token, or with an Anthropic API key billed per use."),
             ];
             ui.add_enabled_ui(!busy, |ui| {
-                if let Some(b) = big_choice(ui, self.ask.backend, &options) {
+                if let Some(b) = big_choice(ui, self.ask.backend, &options)
+                    && b != self.ask.backend
+                {
+                    // Each backend keeps its own sessions; the next question starts a fresh one.
+                    self.ask.end_process();
                     self.ask.backend = b;
                     settings::set("ask_backend", serde_json::json!(if b == crate::ask::Backend::OpenCode { "opencode" } else { "claude_api" }));
                 }

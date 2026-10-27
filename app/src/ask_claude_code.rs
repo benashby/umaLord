@@ -100,11 +100,22 @@ const DYNAMIC_SECTIONS_MINIMUM: [u32; 3] = [2, 1, 98];
 
 /// What the CLI signs in with, chosen by what the user gave: nothing (Claude Code's own login),
 /// a setup token from `claude setup-token`, or an API key.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Credential {
     Login,
     SetupToken(String),
     ApiKey(String),
+}
+
+/// Never prints the key or token.
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Login => "Login",
+            Self::SetupToken(_) => "SetupToken(…)",
+            Self::ApiKey(_) => "ApiKey(…)",
+        })
+    }
 }
 
 impl Credential {
@@ -144,7 +155,9 @@ pub fn find_exe() -> Option<PathBuf> {
     let names: &[&str] = if cfg!(windows) { &["claude.exe", "claude.cmd"] } else { &["claude"] };
     let path = std::env::var_os("PATH").unwrap_or_default();
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
-    let extra = home.iter().flat_map(|h| [h.join(".local").join("bin"), h.join(".claude").join("local")]);
+    // Apps opened from Finder don't get the shell's PATH, so look where Homebrew and npm put it.
+    let mac: &[&str] = if cfg!(target_os = "macos") { &["/opt/homebrew/bin", "/usr/local/bin"] } else { &[] };
+    let extra = home.iter().flat_map(|h| [h.join(".local").join("bin"), h.join(".claude").join("local"), h.join(".npm-global").join("bin")]).chain(mac.iter().map(PathBuf::from));
     std::env::split_paths(&path).chain(extra).flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
 }
 
@@ -218,7 +231,8 @@ impl Request {
     /// What the warm process was started with; a question with anything else needs a new one.
     fn fingerprint(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for part in [self.exe.display().to_string(), self.root.display().to_string(), self.model.clone(), self.effort.clone(), format!("{:?}", self.credential), self.mcp.clone().unwrap_or_default()] {
+        let credential = format!("{:?}{}", self.credential, self.credential.secret().unwrap_or_default());
+        for part in [self.exe.display().to_string(), self.root.display().to_string(), self.model.clone(), self.effort.clone(), credential, self.mcp.clone().unwrap_or_default()] {
             h.write(part.as_bytes());
             h.write_u8(0);
         }
@@ -287,6 +301,10 @@ pub fn ask(req: Request, child: Arc<Mutex<Option<Child>>>, wake: impl Fn() + Sen
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let emit = |e: OcEvent| {
+            let e = match e {
+                OcEvent::Error(m) => OcEvent::Error(redact(&m, &req.credential)),
+                e => e,
+            };
             let _ = tx.send(e);
             wake();
         };
@@ -300,19 +318,44 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// Stop a process and everything it started, and reap it. On Windows an npm install runs
+/// `claude.cmd`, whose `node` child would outlive a plain kill of `cmd.exe` and hold its pipes.
+pub fn kill(mut proc: Child) {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/T", "/F", "/PID", &proc.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        crate::ask::hidden(&mut cmd);
+        let _ = cmd.status();
+    }
+    let _ = proc.kill();
+    let _ = proc.wait();
+}
+
+/// How long to wait for a record before checking whether the user stopped the turn.
+const POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long Claude Code may take to answer `initialize`.
+const STARTUP: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn turn(req: &Request, child: &Arc<Mutex<Option<Child>>>, emit: &dyn Fn(OcEvent)) -> Result<(), String> {
     let mut warm = lock(&WARM);
     let fingerprint = req.fingerprint();
     let alive = lock(child).as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
     let reusable = alive && warm.as_ref().is_some_and(|w| w.fingerprint == fingerprint && req.session.as_deref() == Some(w.session.as_str()));
     if !reusable {
-        if let Some(mut old) = lock(child).take() {
-            let _ = old.kill();
-            let _ = old.wait();
+        if let Some(old) = lock(child).take() {
+            kill(old);
         }
         *warm = None;
-        let session = req.session.clone().map_or_else(|| Session::New(new_uuid()), Session::Resume);
-        *warm = Some(start(req, session, child)?);
+        *warm = Some(match req.session.clone() {
+            None => start(req, Session::New(new_uuid()), child)?,
+            // A session that was never saved (stopped before its first answer) can't be resumed;
+            // start a fresh one rather than failing every later question.
+            Some(id) => match start(req, Session::Resume(id), child) {
+                Err(e) if e != "Stopped." => start(req, Session::New(new_uuid()), child)?,
+                r => r?,
+            },
+        });
     }
     let w = warm.as_mut().expect("started above");
     emit(OcEvent::Session(w.session.clone()));
@@ -322,7 +365,17 @@ fn turn(req: &Request, child: &Arc<Mutex<Option<Child>>>, emit: &dyn Fn(OcEvent)
     }
     let mut parser = Parser::default();
     loop {
-        let Ok(v) = w.lines.recv() else { return Err(lost(&mut warm, child)) };
+        let v = match w.lines.recv_timeout(POLL) {
+            Ok(v) => v,
+            // Stop takes the process out of `child`; on Windows its pipes may stay open a moment.
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if lock(child).is_some() => continue,
+            Err(_) => return Err(lost(&mut warm, child)),
+        };
+        // Claude Code's output owns the session id: a resume can fork it.
+        if let Some(id) = v["session_id"].as_str().filter(|id| !id.is_empty() && *id != w.session) {
+            w.session = id.to_string();
+            emit(OcEvent::Session(id.to_string()));
+        }
         match v["type"].as_str().unwrap_or_default() {
             "control_request" => {
                 let reply = control_reply(&v, &req.root);
@@ -361,6 +414,8 @@ fn start(req: &Request, session: Session, child: &Arc<Mutex<Option<Child>>>) -> 
         Session::New(id) | Session::Resume(id) => id.clone(),
     };
     cmd.args(req.args(&session));
+    // Hold the slot while spawning, so a Stop now waits and then finds the process to kill.
+    let mut slot = lock(child);
     let mut proc = cmd.spawn().map_err(|e| format!("couldn't start Claude Code: {e}"))?;
     let (Some(stdin), Some(stdout), Some(stderr_pipe)) = (proc.stdin.take(), proc.stdout.take(), proc.stderr.take()) else {
         let _ = proc.kill();
@@ -389,13 +444,17 @@ fn start(req: &Request, session: Session, child: &Arc<Mutex<Option<Child>>>) -> 
             let mut t = lock(&tail);
             t.push_str(&String::from_utf8_lossy(&buf[..n]));
             if t.len() > 8192 {
-                let cut = t.len() - 4096;
-                let cut = (cut..t.len()).find(|&i| t.is_char_boundary(i)).unwrap_or(0);
+                // Keep whole lines only: a clipped line's missing start could hide a secret from
+                // `redact`.
+                let from = t.len() - 4096;
+                let cut = t[..].char_indices().map(|(i, _)| i).find(|&i| i >= from).unwrap_or(t.len());
+                let cut = t[cut..].find('\n').map_or(t.len(), |nl| cut + nl + 1);
                 t.drain(..cut);
             }
         }
     });
-    *lock(child) = Some(proc);
+    *slot = Some(proc);
+    drop(slot);
     let mut warm = Warm { stdin, lines, stderr, fingerprint: req.fingerprint(), session: id };
     let agents = std::fs::read_to_string(req.root.join("AGENTS.md")).unwrap_or_default();
     let init_id = new_uuid();
@@ -409,10 +468,28 @@ fn start(req: &Request, session: Session, child: &Arc<Mutex<Option<Child>>>) -> 
     if send(&mut warm.stdin, &init).is_err() {
         return Err(exit_error(&warm, child));
     }
+    let deadline = std::time::Instant::now() + STARTUP;
     loop {
-        let Ok(v) = warm.lines.recv() else { return Err(exit_error(&warm, child)) };
+        let v = match warm.lines.recv_timeout(POLL) {
+            Ok(v) => v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if lock(child).is_none() => return Err("Stopped.".into()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if std::time::Instant::now() < deadline => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(p) = lock(child).take() {
+                    kill(p);
+                }
+                return Err("Claude Code didn't start within a minute.".into());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(exit_error(&warm, child)),
+        };
         if v["type"] == "control_response" && v["response"]["request_id"] == init_id.as_str() {
-            return if v["response"]["subtype"] == "success" { Ok(warm) } else { Err(format!("Claude Code didn't start: {}", v["response"]["error"].as_str().unwrap_or("initialize failed"))) };
+            if v["response"]["subtype"] == "success" {
+                return Ok(warm);
+            }
+            if let Some(p) = lock(child).take() {
+                kill(p);
+            }
+            return Err(format!("Claude Code didn't start: {}", v["response"]["error"].as_str().unwrap_or("initialize failed")));
         }
     }
 }
@@ -434,7 +511,14 @@ fn lost(warm: &mut Option<Warm>, child: &Arc<Mutex<Option<Child>>>) -> String {
 
 fn exit_error(w: &Warm, child: &Arc<Mutex<Option<Child>>>) -> String {
     let Some(mut proc) = lock(child).take() else { return "Stopped.".into() };
-    let status = proc.wait().ok();
+    // Its output ended; if it hasn't exited yet, it won't answer any more either.
+    let status = match proc.try_wait() {
+        Ok(Some(status)) => Some(status),
+        _ => {
+            let _ = proc.kill();
+            proc.wait().ok()
+        }
+    };
     let tail = crate::ask_opencode::strip_ansi(&lock(&w.stderr));
     let last = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default().trim().to_string();
     match (status.and_then(|s| s.code()), last.is_empty()) {
@@ -485,13 +569,23 @@ fn decide(tool: &str, input: &Value, root: &Path) -> Value {
             out
         })
     };
-    let inside = |key: &str| {
-        input[key].as_str().is_none_or(|p| {
-            let p = Path::new(p);
-            resolve(&if p.is_absolute() { p.to_path_buf() } else { root.join(p) }).starts_with(resolve(root))
+    let inside_path = |p: &str| {
+        // Claude Code expands `~` itself, so a home path would look relative here.
+        if p.starts_with('~') {
+            return false;
+        }
+        let p = Path::new(p);
+        resolve(&if p.is_absolute() { p.to_path_buf() } else { root.join(p) }).starts_with(resolve(root))
+    };
+    let inside = |key: &str| input[key].as_str().is_none_or(inside_path);
+    // Glob's pattern can name another folder by itself (`/home/u/**`, `../**`).
+    let pattern_ok = || {
+        input["pattern"].as_str().is_none_or(|g| {
+            let rooted = g.starts_with(['/', '\\', '~']) || g.contains("..") || Path::new(g).is_absolute();
+            tool != "Glob" || !rooted || inside_path(g.split(['*', '?', '[', '{']).next().unwrap_or(g))
         })
     };
-    let allowed = tool.starts_with("mcp__umalord__") || (NATIVE_TOOLS.contains(&tool) && inside("file_path") && inside("path"));
+    let allowed = tool.starts_with("mcp__umalord__") || (NATIVE_TOOLS.contains(&tool) && inside("file_path") && inside("path") && pattern_ok());
     if allowed {
         json!({"behavior": "allow", "updatedInput": input})
     } else {
@@ -538,6 +632,7 @@ impl Parser {
             ("stream_event", _) => {
                 let e = &v["event"];
                 match e["type"].as_str().unwrap_or_default() {
+                    "message_start" => self.streamed = false,
                     "content_block_start" => self.block_started = e["content_block"]["type"] == "text",
                     "content_block_delta" if e["delta"]["type"] == "text_delta" => {
                         if let Some(t) = e["delta"]["text"].as_str().filter(|t| !t.is_empty()) {
@@ -666,6 +761,10 @@ mod tests {
         assert!(!allow("Read", json!({"file_path": "/etc/hostname"})));
         assert!(!allow("Read", json!({"file_path": "../outside.md"})));
         assert!(!allow("Bash", json!({"command": "ls"})));
+        assert!(!allow("Read", json!({"file_path": "~/.ssh/id_rsa"})));
+        assert!(!allow("Glob", json!({"pattern": "/etc/**"})));
+        assert!(!allow("Glob", json!({"pattern": "../**/*.md"})));
+        assert!(allow("Glob", json!({"pattern": "knowledge/**/*.md"})));
         assert!(!allow("Write", json!({"file_path": root.join("x.md").display().to_string()})));
     }
 
@@ -726,6 +825,7 @@ mod tests {
     #[test]
     fn errors_never_show_the_secret() {
         let c = Credential::SetupToken("sk-ant-oat01-supersecret".into());
+        assert!(!format!("{c:?}").contains("supersecret"));
         assert_eq!(redact("bad token sk-ant-oat01-supersecret here", &c), "bad token [REDACTED] here");
     }
 }
