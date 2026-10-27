@@ -162,9 +162,12 @@ the steps to plan a career, and the game words the app uses.
     - Free models are only offered for a limited time and are weaker than Claude. Pick one
       in Settings > AI assistant. The note under the model says whether your questions are
       kept.
-  - Claude API gives better answers but needs your own Anthropic API key from
-    https://console.anthropic.com, and use is billed to that key. Paste the key into
-    Settings > AI assistant, or set the ANTHROPIC_API_KEY environment variable.
+  - Claude gives better answers. With Claude Code installed (claude.com/claude-code), it can
+    use your Claude account: either sign Claude Code in (run `claude`, then /login) and leave
+    the key box empty, or run `claude setup-token` and paste the sk-ant-oat01-... it prints
+    into Settings > AI assistant. Use counts against your Claude plan. Or paste an Anthropic
+    API key from https://console.anthropic.com (works without Claude Code too), billed per use,
+    or set the ANTHROPIC_API_KEY environment variable.
 
 
 Game knowledge: the Help window's word list and Home's "Did you know?" card come from

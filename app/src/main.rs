@@ -7,6 +7,7 @@
 
 mod agent;
 mod ask;
+mod ask_claude_code;
 mod ask_opencode;
 mod career;
 mod data;

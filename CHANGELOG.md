@@ -6,6 +6,7 @@ What changed in each release. Releases are built from the tagged source by GitHu
 
 ### Added
 
+- The Ask tab's Claude backend can run on your Claude account: with Claude Code installed, questions go through it, signed in with its own login, a setup token from `claude setup-token`, or an API key. It runs isolated from your Claude Code settings, keeps one process per conversation so follow-ups start at once, and streams the answer.
 - Builds and runs on Linux (Wayland) and macOS from source, tested in CI on all three. Settings live in the platform's own folder, times show in your local time zone, and the Ask tab uses `opencode` from your PATH.
 - The app bundles small symbol fonts, so every icon draws whatever fonts the system has.
 

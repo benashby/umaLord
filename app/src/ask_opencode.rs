@@ -89,6 +89,8 @@ pub struct ToolEvent {
 pub enum OcEvent {
     Session(String),
     Text(String),
+    /// More of the text being streamed (Claude Code's partial messages): no paragraph break.
+    TextDelta(String),
     Tool(ToolEvent),
     Tokens(u64, u64),
     Error(String),
@@ -106,7 +108,7 @@ pub fn find_exe(root: Option<&Path>) -> Option<PathBuf> {
     std::env::var_os("PATH")?.to_str()?.split(if cfg!(windows) { ';' } else { ':' }).map(|d| Path::new(d).join(name)).find(|p| p.is_file())
 }
 
-fn command(exe: &Path) -> Command {
+pub(crate) fn command(exe: &Path) -> Command {
     let mut cmd = Command::new(exe);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     crate::ask::hidden(&mut cmd);
