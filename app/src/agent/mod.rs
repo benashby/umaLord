@@ -257,6 +257,9 @@ fn build_registry() -> Vec<ToolSpec> {
     let query = || obj(json!({"query": {"type": "string"}}), &["query"]);
     let skills = || json!({"type": "array", "items": {"type": "string"}, "description": "Skill names or ids"});
     let purposes = json!({"type": "string", "enum": ["Champions Meeting", "Team Trials", "Parent run", "League of Heroes", "Other"]});
+    let wins = json!({"type": "array", "items": {"type": "string"}, "description": "The G1 races it won, by their exact names in the game data (find_races finds them, e.g. 'Tokyo Yushun (Japanese Derby)'); leave out for none"});
+    let ancestor = obj(json!({"uma": {"type": "string"}, "g1_wins": wins}), &["uma"]);
+    let legacy = obj(json!({"uma": {"type": "string"}, "g1_wins": wins, "parents": {"type": "array", "maxItems": 2, "items": ancestor}}), &["uma"]);
     vec![
         // --- Read
         spec("get_account_summary", Read, "👤", "Read the account", "The account at a glance: profile, server, umas by stars and potential, cards by type and limit break, maxed SSRs, saved parents and plans, and the working plan in one line.", obj(json!({}), &[])),
@@ -273,6 +276,22 @@ fn build_registry() -> Vec<ToolSpec> {
         spec("get_slot_ranking", Read, "🏅", "Ranked cards for a slot", "Rank the cards for one deck slot of the working plan, given the rest of the deck: the meta sheet's backing (★), the simulated score in stat points, and why. Slot 1–5 are your own cards, 6 the borrowed friend card. Model output: suggestions, not game data.", obj(json!({"slot": {"type": "integer", "minimum": 1, "maximum": 6}, "top_n": {"type": "integer", "minimum": 1, "maximum": 15}}), &["slot"])),
         spec("explain_card", Read, "🃏", "Explained a card", "Why a card is or isn't a good pick for the working plan: its rank and score for the slot it would fill, the meta sheet's backing, and the reasons.", query()),
         spec("recommend_trainees", Read, "🐴", "Suggested trainees", "The owned trainees that fit the working plan best: the meta sheet's picks you own first (★), then the best aptitude fits, with stars, potential and aptitudes for the goal.", obj(json!({"top_n": {"type": "integer", "minimum": 1, "maximum": 12}}), &[])),
+        spec(
+            "get_affinity",
+            Read,
+            "🌱",
+            "Worked out affinity",
+            "Affinity between a trainee and one or two legacies (parents), each with up to two of its own parents (the trainee's grandparents) and the G1 races each won, from the game's own relation tables. Gives each slot's own affinity, which its sparks roll with (chance = base × (1 + affinity/100)), its parts (relation groups shared with the trainee, the trios through each grandparent, the two legacies' link, +3 per G1 both members of a link won), and the lineage total with the game's symbol (◎ over 150, ○ 51–150, △ 50 or less; the symbol is for the lineage, not one slot). Any outfit of a character gives the same affinity. Wins left out count as none.",
+            obj(json!({"trainee": {"type": "string", "description": "The uma to train: name, outfit or id"}, "legacies": {"type": "array", "minItems": 1, "maxItems": 2, "items": legacy.clone()}}), &["trainee", "legacies"]),
+        ),
+        spec(
+            "rank_legacies",
+            Read,
+            "🌱",
+            "Ranked legacy partners",
+            "The characters with the most base affinity to a trainee, from the game's relation tables, with the account's own umas marked (stars: 3★ or more passes on her unique as a green spark). With `with`, ranks a second legacy by its affinity to both the trainee and that first legacy. Base affinity only: grandparents and shared G1 wins add more (get_affinity).",
+            obj(json!({"trainee": {"type": "string"}, "with": {"type": "string", "description": "A legacy already chosen"}, "owned_only": {"type": "boolean"}, "top_n": {"type": "integer", "minimum": 1, "maximum": 30}}), &["trainee"]),
+        ),
         spec("list_notes", Read, "📝", "Listed notes", "List the project's markdown notes: insights.md (Claude's evidence-backed opinions), sources.md, plans/*.md (career plans), results/*.md (real results logs), account/*.md.", obj(json!({}), &[])),
         spec("read_note", Read, "📝", "Read a note", "Read one note file by its path from list_notes, e.g. insights.md, results/careers.md, or the sourced knowledge notes: knowledge/mechanics.md (race mechanics, Team Trials scoring, the CM format, sparks, Grand Concert), knowledge/racecourses.md (every CM course's layout and stamina by style) and knowledge/skills.md (skill advice, debuffs, post-race hints).", obj(json!({"path": {"type": "string"}}), &["path"])),
         spec("glossary", Read, "📖", "Looked up a term", "Look up a community term (e.g. 'MLB', 'spark', 'CM').", obj(json!({"term": {"type": "string"}}), &["term"])),
@@ -511,6 +530,8 @@ mod tests {
             ("glossary", json!({"term": "spark"})),
             ("new_plan", json!({"goal": "Champions Meeting", "cm": "next", "trainee": "Oguri Cap [Starlight Beat]"})),
             ("recommend_trainees", json!({"top_n": 3})),
+            ("get_affinity", json!({"trainee": "Oguri Cap", "legacies": [{"uma": "Silence Suzuka", "g1_wins": ["Arima Kinen", "Japan Cup"], "parents": [{"uma": "Mejiro McQueen", "g1_wins": ["Arima Kinen"]}]}, {"uma": "Gold Ship"}]})),
+            ("rank_legacies", json!({"trainee": "Oguri Cap", "with": "Gold Ship", "top_n": 5})),
             ("set_plan", json!({"style": "Pace", "target_stats": [1200, 1000, 1000, 600, 1000], "ground": "Good", "meta_influence": "tie-break"})),
             ("get_plan", json!({})),
             ("set_deck", json!({"cards": ["Kitasan Black"], "friend": "none"})),

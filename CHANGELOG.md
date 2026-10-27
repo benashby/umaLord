@@ -10,6 +10,7 @@ What changed in each release. Releases are built from the tagged source by GitHu
 - Builds and runs on Linux (Wayland) and macOS from source, tested in CI on all three. Settings live in the platform's own folder, times show in your local time zone, and the Ask tab uses `opencode` from your PATH.
 - The app bundles small symbol fonts, so every icon draws whatever fonts the system has.
 - Pulled another copy? A small ＋ beside a card's LB diamonds or an uma's stars in their details (or the + key) raises it by one and saves it, with Undo.
+- Affinity between a trainee and her parents and grandparents, from the game's own relation tables plus +3 per shared G1. The assistant can work out each slot's affinity and rank the best parents for a trainee, and the app refreshes the tables from uma.guide every week.
 
 ### Fixed
 

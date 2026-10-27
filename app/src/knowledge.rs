@@ -678,6 +678,8 @@ pub struct Knowledge {
     pub pvp_meta: Option<crate::meta::PvpMeta>,
     /// The community skill tier list (`skill_tiers.json`).
     pub skill_tiers: Option<crate::notes::SkillTiers>,
+    /// The game's affinity tables (`affinity.json`, or a newer copy the live refresh fetched).
+    pub affinity: crate::affinity::AffinityTable,
     /// The sourced glossary and tips from `knowledge/mechanics.md`.
     pub terms: Vec<crate::notes::Term>,
     pub tips: Vec<crate::notes::Tip>,
@@ -731,6 +733,7 @@ impl Knowledge {
         k.cm_schedule = read(dir, "cm_schedule.json").unwrap_or_default();
         k.pvp_meta = read(dir, "pvp_meta.json").ok();
         k.skill_tiers = crate::notes::SkillTiers::load(&dir.join("skill_tiers.json"));
+        k.affinity = read(dir, "affinity.json").unwrap_or_default();
         Ok(k)
     }
 
@@ -798,6 +801,7 @@ impl Knowledge {
             scenarios: None,
             pvp_meta: None,
             skill_tiers: None,
+            affinity: Default::default(),
             terms: Vec::new(),
             tips: Vec::new(),
             umalator_built: None,

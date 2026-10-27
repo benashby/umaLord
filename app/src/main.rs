@@ -5,6 +5,7 @@
 //! Usage: `umalord [path-to-umaLord-folder]`. Without a path it searches upward from the
 //! current dir and the exe for `account/support_cards.md`.
 
+mod affinity;
 mod agent;
 mod ask;
 mod ask_claude_code;
