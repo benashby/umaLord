@@ -555,19 +555,33 @@ fn control_reply(v: &Value, root: &Path) -> Value {
 /// Whether Claude Code may use a tool it asks about: umaLord's own tools, and reading or
 /// searching inside the umaLord folder. Everything else is denied.
 fn decide(tool: &str, input: &Value, root: &Path) -> Value {
-    // A path that doesn't exist can't be canonicalized, so `..` is folded by hand first.
+    // Fold `..` by hand, then canonicalize the deepest part that exists and add the rest back:
+    // a file that doesn't exist yet can't be canonicalized itself, and comparing it raw against a
+    // canonical folder fails where the folder sits behind a symlink (macOS's /var →
+    // /private/var) or gets Windows' \\?\ prefix.
     let resolve = |p: &Path| {
-        p.canonicalize().unwrap_or_else(|_| {
-            let mut out = PathBuf::new();
-            for c in p.components() {
-                match c {
-                    std::path::Component::ParentDir => _ = out.pop(),
-                    std::path::Component::CurDir => {}
-                    c => out.push(c),
-                }
+        let mut folded = PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::ParentDir => _ = folded.pop(),
+                std::path::Component::CurDir => {}
+                c => folded.push(c),
             }
-            out
-        })
+        }
+        let mut rest = Vec::new();
+        let mut base = folded.as_path();
+        loop {
+            if let Ok(real) = base.canonicalize() {
+                return rest.iter().rev().fold(real, |acc: PathBuf, part| acc.join(part));
+            }
+            match (base.parent(), base.file_name()) {
+                (Some(parent), Some(name)) => {
+                    rest.push(name.to_owned());
+                    base = parent;
+                }
+                _ => return folded,
+            }
+        }
     };
     let inside_path = |p: &str| {
         // Claude Code expands `~` itself, so a home path would look relative here.
@@ -766,6 +780,25 @@ mod tests {
         assert!(!allow("Glob", json!({"pattern": "../**/*.md"})));
         assert!(allow("Glob", json!({"pattern": "knowledge/**/*.md"})));
         assert!(!allow("Write", json!({"file_path": root.join("x.md").display().to_string()})));
+    }
+
+    /// macOS's temp folder is /var → /private/var: a folder reached through a symlink must still
+    /// allow files in it, including ones that don't exist yet.
+    #[cfg(unix)]
+    #[test]
+    fn reads_inside_a_symlinked_folder() {
+        let real = std::env::temp_dir().join(format!("umalord-real-{}", std::process::id()));
+        let link = std::env::temp_dir().join(format!("umalord-link-{}", std::process::id()));
+        std::fs::create_dir_all(real.join("knowledge")).unwrap();
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let allow = |input: Value| decide("Read", &input, &link)["behavior"] == "allow";
+        assert!(allow(json!({"file_path": link.join("knowledge").join("new.md").display().to_string()})));
+        assert!(allow(json!({"file_path": real.join("x.md").display().to_string()})));
+        assert!(allow(json!({"file_path": "knowledge/new.md"})));
+        assert!(!allow(json!({"file_path": link.join("..").join("elsewhere.md").display().to_string()})));
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&real);
     }
 
     #[test]
