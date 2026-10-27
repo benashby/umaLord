@@ -1014,7 +1014,9 @@ impl App {
             return None;
         }
         let path = self.root.as_ref()?.join("app").join("assets").join(sub).join(format!("{id}.webp"));
-        Some(format!("file:///{}", path.to_string_lossy().replace('\\', "/")))
+        // file:///C:/… on Windows, file:///home/… elsewhere.
+        let path = path.to_string_lossy().replace('\\', "/");
+        Some(format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" }))
     }
 
     pub fn owned_card(&self, id: u32) -> Option<&SupportCard> {

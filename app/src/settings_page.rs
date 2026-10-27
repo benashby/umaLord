@@ -211,6 +211,11 @@ fn big_choice<T: PartialEq + Copy>(ui: &mut egui::Ui, value: T, options: &[(T, &
     picked
 }
 
+/// Where the knowledge commands run, and the Python that runs them: Windows has `python` (and
+/// PowerShell); elsewhere it's `python3` in a terminal.
+const SHELL: &str = if cfg!(windows) { "PowerShell" } else { "a terminal" };
+const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
 /// A command with a Copy button, for things to run in a terminal.
 fn command_line(ui: &mut egui::Ui, cmd: &str) {
     let p = pal(ui);
@@ -218,7 +223,7 @@ fn command_line(ui: &mut egui::Ui, cmd: &str) {
         egui::Frame::new().fill(p.input).stroke(Stroke::new(1.0, p.border)).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.label(RichText::new(cmd).monospace().size(size::SM));
         });
-        if ui.small_btn("📋 Copy").on_hover_text("Copy the command, to paste in PowerShell in the umaLord folder").clicked() {
+        if ui.small_btn("📋 Copy").on_hover_text(format!("Copy the command, to paste in {SHELL} in your data folder")).clicked() {
             ui.ctx().copy_text(cmd.to_string());
         }
     });
@@ -629,14 +634,15 @@ impl App {
             None => _ = ui.label(RichText::new("Not downloaded (knowledge/data/skill_tiers.json is missing).").color(p.warn)),
         });
         heading(ui, "Refreshing it");
+        let folder = self.root.as_ref().map_or_else(|| "the umaLord folder".to_string(), |r| r.display().to_string());
         ui.label(
-            RichText::new("Install Python 3, then run one of these in PowerShell from the umaLord folder, and press 🔄 Reload (F5). The meta sheet changes most often.")
+            RichText::new(format!("Install Python 3, then run one of these in {SHELL} from your data folder ({folder}), and press 🔄 Reload (F5). The meta sheet changes most often."))
                 .size(size::SM)
                 .color(p.weak),
         );
         ui.add_space(4.0);
-        command_line(ui, "python -I -X utf8 tools/update_knowledge.py");
-        command_line(ui, "python -I -X utf8 tools/update_knowledge.py --only meta");
+        command_line(ui, &format!("{PYTHON} -I -X utf8 tools/update_knowledge.py"));
+        command_line(ui, &format!("{PYTHON} -I -X utf8 tools/update_knowledge.py --only meta"));
         heading(ui, "Advanced");
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new("📝 Browse notes and data files").min_size(vec2(0.0, 30.0))).on_hover_text("Read the markdown files in this folder: insights, plans, results, your roster files and the knowledge notes").clicked() {
