@@ -213,7 +213,7 @@ saved plans become a + button and a folder menu, and the status bar at the botto
 its labels (hover one for the full text).
 
 Keyboard shortcuts (also listed in Help):
-- Ctrl+1 to Ctrl+4: Home, Collection, Career, Ask
+- Ctrl+1 to Ctrl+5: Home, Collection, Career, Lineage, Ask
 - Ctrl+F: jump to the page's search box
 - Ctrl+S: save the plan (on Career > Plan)
 - F5: reload your roster, game data and plans

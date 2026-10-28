@@ -629,7 +629,7 @@ pub(crate) const GLOSSARY: &[(&str, &str)] = &[
 
 /// Keyboard shortcuts, as Help lists them (`App::shortcuts` handles them).
 pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
-    ("Ctrl+1 … Ctrl+4", "Switch tabs: Home, Collection, Career, Ask"),
+    ("Ctrl+1 … Ctrl+5", "Switch tabs: Home, Collection, Career, Lineage, Ask"),
     ("Ctrl+,", "Open Settings"),
     ("Ctrl+F", "Jump to the page's search box"),
     ("Ctrl+S", "Save the plan (on Career → Plan)"),
@@ -1297,7 +1297,7 @@ impl App {
         }
     }
 
-    /// Keyboard shortcuts: Ctrl+1…4 tabs, Ctrl+F search, Ctrl+S save the plan, F5 reload,
+    /// Keyboard shortcuts: Ctrl+1…5 tabs, Ctrl+F search, Ctrl+S save the plan, F5 reload,
     /// Esc close, ? help, + a pulled copy. Listed in Help (`SHORTCUTS`).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};

@@ -23,6 +23,10 @@ What changed in each release. Releases are built from the tagged source by GitHu
 - Import your finished umas from UmaExtractor's data.json (or `tools/read_veterans.py` on Linux): each lands in your parents list with its sparks, parents and G1 wins, the assistant can rank them as parents for any trainee, and umas you've trained but hadn't listed are added.
 - Affinity between a trainee and her parents and grandparents, from the game's own relation tables plus +3 per shared G1. The assistant can work out each slot's affinity and rank the best parents for a trainee, and the app refreshes the tables from uma.guide every week.
 
+### Changed
+
+- Ctrl+4 opens the new Lineage tab; Ask moved to Ctrl+5.
+
 ### Fixed
 
 - **Parent careers recommended skills the runner couldn't use.** A parent's skills become her runner's white sparks, and 56% of the picks were tied to another style, distance or racecourse. Now every pick fits the runner, and tests check every brief.
