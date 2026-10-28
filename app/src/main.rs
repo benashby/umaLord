@@ -918,6 +918,8 @@ impl App {
             Some("skills") => CollectionTab::Skills,
             _ => CollectionTab::Umas,
         };
+        // UMALORD_LOOK=<key> opens a borrowed card's "What to look for" (runner:0, queue:0, card:<outfit>).
+        app.lineage.look_for = env("UMALORD_LOOK");
         app.lineage.view = match env("UMALORD_TAB").as_deref() {
             Some("lineage-tt") => lineage_page::LineageView::Tt,
             Some("lineage-runner") => lineage_page::LineageView::Runner,

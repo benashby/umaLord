@@ -40,7 +40,7 @@ impl LineageView {
 
 /// A team the worker built, with everything the page shows already worked out.
 pub(crate) enum Built {
-    Cm { team: CmTeam, next: Option<Brief>, queue: Vec<QueueRow> },
+    Cm { team: CmTeam, next: Option<Brief>, queue: Vec<QueueRow>, borrows: Vec<(Option<String>, Vec<(u32, String)>)> },
     Tt { team: TtTeam, next: Option<Brief>, lengths: Vec<String> },
 }
 
@@ -53,6 +53,11 @@ pub(crate) struct QueueRow {
     pub legacies: Vec<(u64, u32)>,
     pub careers: String,
     pub style: String,
+    /// The step's deck and its borrowed card, with why and fallbacks (from its brief).
+    pub deck: Vec<u32>,
+    pub friend: Option<u32>,
+    pub friend_why: Option<String>,
+    pub friend_alts: Vec<(u32, String)>,
 }
 
 #[derive(Default)]
@@ -64,6 +69,8 @@ pub(crate) struct LineageState {
     pub cm_built: Option<Result<Built, String>>,
     /// When the last build arrived (screenshots give its art a moment to load).
     pub done_at: Option<f64>,
+    /// Which borrowed card's "What to look for" is open (a key per place).
+    pub look_for: Option<String>,
     pub tt_built: Option<Result<Built, String>>,
     pub runner: crate::lineage_runner::RunnerState,
 }
@@ -112,8 +119,16 @@ impl App {
                     let team = app.cm_team(&preset, &TeamOpts::default())?;
                     let inv = app.parent_inventory();
                     let next = app.cm_next(&team, &inv);
-                    let queue = team.queue.iter().map(|(i, run)| queue_row(&app, &inv, team.runners[*i].trainee, run)).collect();
-                    Ok(Built::Cm { team, next, queue })
+                    let mut queue = Vec::new();
+                    for (k, (i, run)) in team.queue.iter().enumerate() {
+                        let mut q = queue_row(&app, &inv, team.runners[*i].trainee, run);
+                        let b = app.parent_brief(&team.runners[*i].goal, run, &inv, k);
+                        (q.deck, q.friend, q.friend_why, q.friend_alts) = (b.deck, b.friend, b.friend_why, b.friend_alts);
+                        queue.push(q);
+                    }
+                    // Each runner's borrowed card: why, and what to take instead.
+                    let borrows = team.runners.iter().map(|r| app.friend_picks(&r.plan)).collect();
+                    Ok(Built::Cm { team, next, queue, borrows })
                 }),
                 LineageView::Tt => app.tt_team(200, &TtPins::default()).map(|team| {
                     let inv = app.parent_inventory();
@@ -218,13 +233,13 @@ impl App {
             self.building(ui, "Planning the team: three runners, their parents, decks and skills, raced against each other and against your finished umas…");
             return;
         }
-        let Some(Ok(Built::Cm { team, next, queue })) = &self.lineage.cm_built else {
+        let Some(Ok(Built::Cm { team, next, queue, borrows })) = &self.lineage.cm_built else {
             if let Some(Err(e)) = &self.lineage.cm_built {
                 ui.label(RichText::new(format!("⚠ {e}")).color(pal(ui).warn));
             }
             return;
         };
-        let (team, next, queue) = (team.clone(), next.clone(), queue.clone());
+        let (team, next, queue, borrows) = (team.clone(), next.clone(), queue.clone(), borrows.clone());
         self.panes(
             ui,
             |_, ui| {
@@ -243,7 +258,7 @@ impl App {
             |this, ui| {
                 this.today_row(ui, &team);
                 ui.add_space(12.0);
-                this.runner_cards(ui, &team);
+                this.runner_cards(ui, &team, &borrows);
                 ui.add_space(12.0);
                 this.queue_card(ui, &queue, &team);
                 for n in &team.notes {
@@ -412,11 +427,13 @@ impl App {
         });
     }
 
-    fn runner_cards(&self, ui: &mut egui::Ui, team: &CmTeam) {
+    fn runner_cards(&mut self, ui: &mut egui::Ui, team: &CmTeam, borrows: &[(Option<String>, Vec<(u32, String)>)]) {
         let n = team.runners.len().max(1);
         // Three across from 900 px of overview (about 290 px a card), else stacked.
         let narrow = ui.available_width() < 900.0;
-        let draw = |ui: &mut egui::Ui, r: &crate::parentage::team::Runner, ace: bool| {
+        let open = self.lineage.look_for.clone();
+        let mut toggle: Option<String> = None;
+        let mut draw = |ui: &mut egui::Ui, r: &crate::parentage::team::Runner, ace: bool, k: usize| {
             crate::ui_util::card(ui, |ui| {
                 ui.horizontal(|ui| {
                     self.avatar(ui, r.trainee, 48.0);
@@ -447,10 +464,16 @@ impl App {
                     for c in r.plan.deck.iter().flatten() {
                         self.card_art(ui, *c, 45.0, false);
                     }
-                    if let Some(f) = r.plan.friend {
-                        self.card_art(ui, f, 45.0, true);
+                    if let Some(f) = r.plan.friend
+                        && self.card_art(ui, f, 45.0, true).on_hover_text("Click: what to look for").clicked()
+                    {
+                        toggle = Some(format!("runner:{k}"));
                     }
                 });
+                if let (Some(f), true) = (r.plan.friend, open.as_deref() == Some(&format!("runner:{k}"))) {
+                    let (why, alts) = borrows.get(k).cloned().unwrap_or_default();
+                    self.borrow_look_for(ui, f, why.as_deref(), &alts);
+                }
                 let lineage = if r.parents.now.as_ref().is_some_and(crate::parentage::score::Lineage::meets) {
                     "Her lineage is ready.".to_string()
                 } else if r.parents.steps.is_empty() {
@@ -464,19 +487,24 @@ impl App {
         let ace = team.runners.iter().enumerate().filter_map(|(i, r)| r.sim.map(|s| (i, s.0))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0);
         if narrow {
             for (i, r) in team.runners.iter().enumerate() {
-                draw(ui, r, ace == Some(i));
+                draw(ui, r, ace == Some(i), i);
                 ui.add_space(8.0);
             }
         } else {
             ui.columns(n, |cols| {
                 for (i, (col, r)) in cols.iter_mut().zip(&team.runners).enumerate() {
-                    col.with_layout(egui::Layout::top_down(egui::Align::Min), |col| draw(col, r, ace == Some(i)));
+                    col.with_layout(egui::Layout::top_down(egui::Align::Min), |col| draw(col, r, ace == Some(i), i));
                 }
             });
         }
+        if let Some(k) = toggle {
+            self.lineage.look_for = if self.lineage.look_for.as_ref() == Some(&k) { None } else { Some(k) };
+        }
     }
 
-    fn queue_card(&self, ui: &mut egui::Ui, queue: &[QueueRow], team: &CmTeam) {
+    fn queue_card(&mut self, ui: &mut egui::Ui, queue: &[QueueRow], team: &CmTeam) {
+        let open = self.lineage.look_for.clone();
+        let mut toggle: Option<String> = None;
         crate::ui_util::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(semibold("Parent queue", 15.5));
@@ -504,10 +532,28 @@ impl App {
                         ui.label(RichText::new("· Trackblazer ·").size(12.5).color(pal(ui).weak));
                         ui.label(semibold(&q.careers, 13.0));
                     });
+                    if !q.deck.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for c in &q.deck {
+                                self.card_art(ui, *c, 24.0, false);
+                            }
+                            if let Some(f) = q.friend
+                                && self.card_art(ui, f, 24.0, true).on_hover_text("Click: what to look for").clicked()
+                            {
+                                toggle = Some(format!("queue:{k}"));
+                            }
+                        });
+                    }
+                    if let (Some(f), true) = (q.friend, open.as_deref() == Some(&format!("queue:{k}"))) {
+                        self.borrow_look_for(ui, f, q.friend_why.as_deref(), &q.friend_alts);
+                    }
                 });
                 ui.add_space(4.0);
             }
         });
+        if let Some(k) = toggle {
+            self.lineage.look_for = if self.lineage.look_for.as_ref() == Some(&k) { None } else { Some(k) };
+        }
     }
 
     /// The Next career card: who and why with Start this career; How (Independent
@@ -590,7 +636,10 @@ impl App {
                 ui.add_space(8.0);
             }
             // The body: two columns when there's room.
-            let left = |this: &Self, ui: &mut egui::Ui| {
+            let look_key = format!("card:{}", b.trainee);
+            let look_open = self.lineage.look_for.as_ref() == Some(&look_key);
+            let mut look_toggle = false;
+            let mut left = |this: &Self, ui: &mut egui::Ui| {
                 label_row(ui, "PARENTS", |ui| {
                     if b.legacies.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&b.parents).size(13.0)).wrap());
@@ -614,22 +663,16 @@ impl App {
                             this.card_art(ui, f, art, true);
                         }
                     });
-                    // The borrowed card: what it is, and what to take instead. The
-                    // ranking's reasons are dense, so they're on hover.
+                    // The borrowed card, and on request what to look for.
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
-                        let line = ui.add(egui::Label::new(RichText::new(format!("Borrow from a friend: {} [{}], fully limit broken (MLB).", f.uma, f.title)).size(12.5)).wrap());
-                        if let Some(w) = &b.friend_why {
-                            line.on_hover_text(w);
-                        }
-                        if !b.friend_alts.is_empty() {
-                            ui.label(RichText::new("No friend has it MLB? Next best:").size(12.0).color(p.weak));
-                            for (id, why) in &b.friend_alts {
-                                ui.horizontal(|ui| {
-                                    this.card_art(ui, *id, 24.0, true).on_hover_text(why);
-                                    let c = this.kb.cards.get(id);
-                                    ui.add(egui::Label::new(RichText::new(c.map_or(id.to_string(), |c| format!("{} [{}]", c.uma, c.title))).size(12.0)).wrap()).on_hover_text(why);
-                                });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(egui::Label::new(RichText::new(format!("Borrow: {} [{}] (MLB)", f.uma, f.title)).size(12.5)).wrap());
+                            if ui.link("What to look for").clicked() {
+                                look_toggle = true;
                             }
+                        });
+                        if look_open {
+                            this.borrow_look_for(ui, f.id, b.friend_why.as_deref(), &b.friend_alts);
                         }
                     }
                 });
@@ -688,6 +731,9 @@ impl App {
             } else {
                 left(self, ui);
                 right(self, ui);
+            }
+            if look_toggle {
+                self.lineage.look_for = if look_open { None } else { Some(look_key.clone()) };
             }
             // How races work, for when it's needed: collapsed, remembered.
             ui.separator();
@@ -818,6 +864,60 @@ impl App {
         self.toast("Career → Plan filled in from the Next career card.", crate::ui_util::ToastKind::Info);
     }
 
+    /// What to look for when borrowing a friend's support card: the card at MLB, why it's the
+    /// pick, text to paste into the game's friend search, and the next best if no friend has it.
+    pub(crate) fn borrow_look_for(&self, ui: &mut egui::Ui, id: u32, why: Option<&str>, alts: &[(u32, String)]) {
+        let p = pal(ui);
+        let Some(c) = self.kb.cards.get(&id) else { return };
+        egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.5, p.accent.gamma_multiply(0.7))).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("LOOK FOR · A FRIEND'S SUPPORT CARD").size(11.5).strong().color(crate::lineage_kit::ink(p.accent, p.surface)));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                self.card_art(ui, id, 72.0, true);
+                ui.vertical(|ui| {
+                    ui.add(egui::Label::new(semibold(format!("{} [{}]", c.uma, c.title), 14.5)).wrap());
+                    ui.label(RichText::new(format!("Fully limit broken (MLB) · {}", c.kind)).size(12.5));
+                    if let Some(w) = why {
+                        // The ranking's reason is dense: say it plainly, the detail on hover.
+                        let plain = if w.contains("meta sheet") { "Why her: the community meta sheet's pick for this race." } else { "Why her: she adds the most to this deck in simulated careers." };
+                        ui.add(egui::Label::new(RichText::new(plain).size(12.5)).wrap()).on_hover_text(w);
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.label(RichText::new("SEARCH TEXT · PASTE INTO THE GAME'S FRIEND SEARCH").size(11.5).strong().color(p.weak));
+            let search = format!("{} {}", c.uma, c.title);
+            ui.horizontal(|ui| {
+                let field_w = (ui.available_width() - 70.0).max(80.0);
+                egui::Frame::new().fill(p.input).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                    ui.set_max_width(field_w);
+                    ui.add(egui::Label::new(RichText::new(&search).monospace().size(12.5)).truncate());
+                });
+                if ui.add(egui::Button::new(RichText::new("Copy").size(12.5)).wrap_mode(egui::TextWrapMode::Extend).min_size(vec2(52.0, 24.0))).clicked() {
+                    ui.ctx().copy_text(search.clone());
+                }
+            });
+            if !alts.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new("NO FRIEND HAS IT MLB? NEXT BEST").size(11.5).strong().color(p.weak));
+                for (k, (a, why)) in alts.iter().enumerate() {
+                    let ac = self.kb.cards.get(a);
+                    ui.horizontal(|ui| {
+                        self.card_art(ui, *a, 30.0, true);
+                        ui.vertical(|ui| {
+                            ui.add(egui::Label::new(RichText::new(format!("{}. {}", k + 2, ac.map_or(a.to_string(), |c| format!("{} [{}]", c.uma, c.title)))).size(12.5)).wrap());
+                            let plain = if why.contains("meta sheet") { "Also on the meta sheet for this race." } else { "Next best in simulated careers." };
+                            ui.add(egui::Label::new(RichText::new(plain).size(12.0).color(p.weak)).wrap()).on_hover_text(why);
+                        });
+                    });
+                }
+            }
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(RichText::new("Need a new friend? Look for a trainer whose support card list shows this card at MLB.").size(12.0).color(p.weak)).wrap());
+        });
+    }
+
     /// An uma's round avatar, `size` across, with a thin ring; initials if the art is missing.
     pub(crate) fn avatar(&self, ui: &mut egui::Ui, outfit: u32, size: f32) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
@@ -839,7 +939,7 @@ impl App {
 
     /// A support card's art, `w` wide at 3:4; a borrowed card gets a dashed-look ring and an MLB tag.
     pub(crate) fn card_art(&self, ui: &mut egui::Ui, id: u32, w: f32, borrowed: bool) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(vec2(w, w * 4.0 / 3.0), Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, w * 4.0 / 3.0), if borrowed { Sense::click() } else { Sense::hover() });
         if ui.is_rect_visible(rect) {
             let p = pal(ui);
             match self.art_uri("cards", id) {
@@ -913,7 +1013,7 @@ fn queue_row(app: &App, inv: &crate::parentage::Inventory, runner: u32, run: &cr
     let what = if run.must.is_empty() { "just finishing her".to_string() } else { run.must.iter().map(|w| w.label(&app.kb)).collect::<Vec<_>>().join(", ") };
     let style = app.kb.umas.get(&run.trainee).map(|u| u.aptitude.best_style().label()).unwrap_or("").to_string();
     let (typical, _) = crate::parentage::verify::step_spread(run.p);
-    QueueRow { trainee: run.trainee, for_runner: runner, what, legacies, careers: format!("usually {typical} career{}", if typical == 1 { "" } else { "s" }), style }
+    QueueRow { trainee: run.trainee, for_runner: runner, what, legacies, careers: format!("usually {typical} career{}", if typical == 1 { "" } else { "s" }), style, deck: Vec::new(), friend: None, friend_why: None, friend_alts: Vec::new() }
 }
 
 /// A section that opens and closes, remembered across launches in settings.json
