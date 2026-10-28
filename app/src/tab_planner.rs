@@ -476,7 +476,7 @@ pub(crate) fn day_number(date: &str) -> i64 {
     era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
 }
 
-fn days_apart(a: &str, b: &str) -> i64 {
+pub(crate) fn days_apart(a: &str, b: &str) -> i64 {
     (day_number(a) - day_number(b)).abs()
 }
 

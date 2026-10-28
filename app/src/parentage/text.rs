@@ -246,3 +246,101 @@ pub fn import_note(kb: &Knowledge, plan: &ParentPlan, vets: &[Veteran]) -> Optio
     let what = if must.is_empty() { "finishes it".to_string() } else { format!("has its must-haves ({})", must.iter().map(|w| w.label(kb)).collect::<Vec<_>>().join(", ")) };
     Some(format!("Parent plan: #{} {what}, so step {} can end. Keep it and move on?", hit.id, cur + 1))
 }
+
+/// A Champions Meeting team: the CM and the budget, each runner, then the parent queue.
+pub fn team(kb: &Knowledge, t: &super::team::CmTeam, inv: &Inventory) -> String {
+    let e = &t.event;
+    let mut out = format!(
+        "CM {} {} — {}, {} ({}), {} days away. Parent careers there's time for: {:.0}; the queue needs about {:.1}.\n",
+        e.id,
+        e.name,
+        e.course_name,
+        e.date,
+        if e.announced { "announced" } else { "estimated" },
+        t.days_left,
+        t.budget,
+        t.needed
+    );
+    for (i, r) in t.runners.iter().enumerate() {
+        let lineage = if r.parents.now.as_ref().is_some_and(Lineage::meets) {
+            "lineage ready ✔".to_string()
+        } else if r.parents.steps.is_empty() || r.parents.over_cap {
+            "⚠ no lineage under the cap".to_string()
+        } else {
+            format!("{} parent step{}, ~{:.1} careers", r.parents.steps.len(), if r.parents.steps.len() == 1 { "" } else { "s" }, r.parents.careers())
+        };
+        let deck: Vec<String> = r.plan.deck.iter().flatten().map(|c| kb.cards.get(c).map_or(c.to_string(), |c| c.uma.clone())).collect();
+        let friend = r.plan.friend.and_then(|c| kb.cards.get(&c)).map_or("none".to_string(), |c| format!("{} [{}] (MLB)", c.uma, c.title));
+        let skills: Vec<String> = r.plan.skills.iter().take(6).filter_map(|s| kb.skills.get(s).map(|k| k.name.clone())).collect();
+        let mut sim = r.sim.map_or("not raced".to_string(), |(s, lo, hi)| format!("head to head against her two teammates she wins {:.0}% (95% {:.0}–{:.0}%, simulation)", s * 100.0, lo * 100.0, hi * 100.0));
+        if let Some((surv, spurt)) = r.stamina {
+            sim += &format!("; she survives {:.0}% of races and reaches full spurt in {:.0}%", surv * 100.0, spurt * 100.0);
+        }
+        out += &format!(
+            "Runner {}: {} ({}){}: {lineage}. Deck: {}; borrow {friend}. Skills to buy: {}{}. {sim}.\n",
+            i + 1,
+            uma_name(kb, r.trainee),
+            r.style.label(),
+            if r.meta_pick { " ★ meta pick" } else { "" },
+            deck.join(", "),
+            skills.join(", "),
+            if r.plan.skills.len() > 6 { format!(" and {} more", r.plan.skills.len() - 6) } else { String::new() }
+        );
+        for n in &r.notes {
+            out += &format!("  {n}\n");
+        }
+    }
+    if t.queue.is_empty() {
+        out += "No parent careers needed: train the three.\n";
+    } else {
+        out += "Parent queue (harder first):\n";
+        for (n, (i, run)) in t.queue.iter().enumerate() {
+            out += &format!("{}. For {}: {}", n + 1, uma_name(kb, t.runners[*i].trainee), step(kb, inv, n + 1, run).split_once(": ").map_or(String::new(), |x| x.1.to_string()));
+        }
+    }
+    for n in &t.notes {
+        out += &format!("⚠ {n}\n");
+    }
+    out
+}
+
+/// A Team Trials team: each race's runners with their estimated points, the Aces, the total,
+/// and the career that raises it most.
+pub fn tt(kb: &Knowledge, t: &super::tt::TtTeam) -> String {
+    let mut out = format!("Team Trials team, about {:.0} points a round of the five races (estimate).\n", t.total);
+    for r in &t.rows {
+        out += &format!("{} ({} style{}):\n", r.name, r.styles, if r.styles == 1 { "" } else { "s" });
+        for s in &r.slots {
+            let lineage = if s.parents.now.as_ref().is_some_and(Lineage::meets) {
+                "lineage ready".to_string()
+            } else if s.parents.steps.is_empty() || s.parents.over_cap {
+                "no lineage under the cap".to_string()
+            } else {
+                format!("{} parent step(s), ~{:.1} careers", s.parents.steps.len(), s.parents.careers())
+            };
+            let friend = s.plan.friend.and_then(|c| kb.cards.get(&c)).map_or("none".to_string(), |c| format!("{} (MLB)", c.uma));
+            out += &format!(
+                "  {}{} ({}): ~{:.0} points (placement {:.0}, skills {:.0}){}; {lineage}; borrow {friend}.\n",
+                if s.ace { "★ Ace " } else { "" },
+                uma_name(kb, s.trainee),
+                s.style.label(),
+                s.total,
+                s.placement,
+                s.skills,
+                match (s.natural, s.parents.now.as_ref().is_some_and(Lineage::meets)) {
+                    (true, _) => "",
+                    (false, true) => ", B here: her best two parents, which you have, lift her to A",
+                    (false, false) => ", B here: her parents must lift her to A",
+                }
+            );
+        }
+        for n in &r.notes {
+            out += &format!("  ⚠ {n}\n");
+        }
+    }
+    out += &format!("Next career: {}\n", t.next);
+    for n in &t.notes {
+        out += &format!("{n}\n");
+    }
+    out
+}

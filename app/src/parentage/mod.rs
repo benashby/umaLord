@@ -16,6 +16,8 @@ pub mod outcome;
 pub mod score;
 pub mod text;
 pub mod track;
+pub mod tt;
+pub mod team;
 pub mod verify;
 
 use crate::affinity::chara;
