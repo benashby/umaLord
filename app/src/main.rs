@@ -1711,6 +1711,9 @@ impl App {
         ui_util::set_pose(self.pose());
         self.shortcuts(&ctx);
         self.live_poll(&ctx);
+        // Art for every uma and card in the data, downloaded in the background.
+        self.sweep_art();
+        self.pump_art(&ctx);
         let p = theme::palette(self.dark);
         egui::Panel::top("top_bar")
             .frame(egui::Frame::new().fill(p.surface).inner_margin(Margin::symmetric(14, 9)))

@@ -7,6 +7,7 @@ The game changes: new umas and cards every few weeks, a Champions Meeting every 
 | Data | From | How often | Where it lands |
 |---|---|---|---|
 | Champions Meeting schedule, conditions, turned-off skills | umamusume.com's official news; Umalator's presets | on launch, when over 6 hours old (`live.rs`) | the app's cache (`events.json`) |
+| Art for every released uma and card in the data | uma.guide (icons, card thumbnails) | once per launch, for what's missing (`tab_cards::sweep_art`) | the data folder's `app/assets/` |
 | Affinity, spark and win-record tables | uma.guide's data chunk | weekly (`live.rs`, `spawn_affinity`) | the app's cache; `knowledge/data/{affinity,sparks,saddles}.json` are the bundled copies |
 
 Settings → Data and updates shows each one's age and has Refresh now.
@@ -15,7 +16,7 @@ Settings → Data and updates shows each one's age and has Refresh now.
 
 `python -I -X utf8 tools/update_knowledge.py` downloads uma.guide's data and writes, as text, without running the site's code:
 
-- `knowledge/data/umas.json`, `cards.json`, `skills.json`, `races.json`, `glossary.json`, `meta.json`: every uma, card, skill and race. Each outfit's unique is the game's own id (1, outfit − 1, the chara id's last three digits, 1), which the game's spark table confirms; `cargo test uniques_match_the_spark_table` checks it.
+- `knowledge/data/umas.json`, `cards.json`, `skills.json`, `races.json`, `glossary.json`, `meta.json`: every uma, card, skill and race, and the art of any new uma or card into `app/assets/` (`cargo test every_uma_and_card_has_art` checks none is missing). Each outfit's unique is the game's own id (1, outfit − 1, the chara id's last three digits, 1), which the game's spark table confirms; `cargo test uniques_match_the_spark_table` checks it.
 - `cm_schedule.json`, `umalator.json` and `sim/*.json` (Umalator's courses, presets and simulator data).
 - `--only affinity`: affinity, sparks, saddles. `--only meta`: `pvp_meta.json`, the community CM sheet (decks, runners, stats, uniques per CM and style). `--only tiers`: `skill_tiers.json`, the community skill tier list. `--only cm`, `--only umalator`: one part.
 

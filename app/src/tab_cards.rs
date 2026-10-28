@@ -129,14 +129,42 @@ pub(crate) struct AddCard {
     pub owned_only: bool,
 }
 
-/// Card art to download from uma.guide, four at a time.
+/// Which art: a support card's, or an uma outfit's icon.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Art {
+    Card,
+    Uma,
+}
+
+impl Art {
+    /// Its folder under app/assets, and where uma.guide serves it.
+    pub(crate) fn dir(self) -> &'static str {
+        match self {
+            Art::Card => "cards",
+            Art::Uma => "umas",
+        }
+    }
+
+    pub(crate) fn url(self, id: u32) -> String {
+        match self {
+            Art::Card => format!("https://uma.guide/img/card/composite/tex_support_card_{id}_thumb.webp"),
+            // The character id is the outfit id's first four digits: 100101 is chr_icon_1001_100101.
+            Art::Uma => format!("https://uma.guide/icon/uma/chr_icon_{}_{id}_01.webp", id / 100),
+        }
+    }
+}
+
+/// Art to download from uma.guide, four at a time: cards and uma icons the app has no picture
+/// for (on demand, and once per launch for everything in the knowledge data).
 #[derive(Default)]
 pub(crate) struct ArtQueue {
-    pending: VecDeque<u32>,
-    seen: HashSet<u32>,
-    running: Vec<mpsc::Receiver<(u32, bool)>>,
+    pending: VecDeque<(Art, u32)>,
+    seen: HashSet<(Art, u32)>,
+    running: Vec<mpsc::Receiver<(Art, u32, bool)>>,
     /// The card just saved: say so if its art fails.
     watch: Option<u32>,
+    /// The launch sweep has been queued.
+    swept: bool,
 }
 
 impl Default for CardsState {
@@ -173,7 +201,6 @@ fn card_sorts() -> Vec<SortOption> {
 impl App {
     pub(crate) fn cards_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        self.pump_art(&ctx);
         let mut collapsed = kit::rail_collapsed(&ctx, "cards");
         if collapsed && self.focus_search.get() {
             collapsed = false;
@@ -1257,18 +1284,45 @@ impl App {
 
     /// Queue card art to download from uma.guide (not in tests or screenshot runs).
     fn queue_art(&mut self, ids: impl IntoIterator<Item = u32>) {
+        self.queue_art_of(Art::Card, ids);
+    }
+
+    /// Queue art of one kind to download, skipping what's already there or queued.
+    pub(crate) fn queue_art_of(&mut self, kind: Art, ids: impl IntoIterator<Item = u32>) {
         if cfg!(test) || std::env::var_os("UMALORD_SCREENSHOT").is_some() || self.root.is_none() {
             return;
         }
         for id in ids {
-            if !self.card_art.contains(&id) && self.cards.art.seen.insert(id) {
-                self.cards.art.pending.push_back(id);
+            let have = match kind {
+                Art::Card => self.card_art.contains(&id),
+                Art::Uma => self.uma_art.contains(&id),
+            };
+            if !have && self.cards.art.seen.insert((kind, id)) {
+                self.cards.art.pending.push_back((kind, id));
             }
         }
     }
 
+    /// Once per launch, when fetching is allowed (Settings → Data and updates): queue the art of
+    /// every released uma and card the knowledge data has and the app doesn't, so nothing shows
+    /// as a placeholder once a release reaches the data.
+    pub(crate) fn sweep_art(&mut self) {
+        if self.cards.art.swept {
+            return;
+        }
+        self.cards.art.swept = true;
+        if !crate::live::enabled() || std::env::var("UMALORD_LIVE").is_ok_and(|v| v != "fetch") {
+            return;
+        }
+        let today = crate::ui_util::today();
+        let umas: Vec<u32> = self.kb.umas.values().filter(|u| u.release.is_empty() || u.release.as_str() <= today.as_str()).map(|u| u.id).collect();
+        let cards: Vec<u32> = self.kb.cards.values().filter(|c| c.released(&today)).map(|c| c.id).collect();
+        self.queue_art_of(Art::Uma, umas);
+        self.queue_art_of(Art::Card, cards);
+    }
+
     /// Start queued downloads, four at a time, and collect finished ones.
-    fn pump_art(&mut self, ctx: &egui::Context) {
+    pub(crate) fn pump_art(&mut self, ctx: &egui::Context) {
         let mut done = Vec::new();
         self.cards.art.running.retain(|rx| match rx.try_recv() {
             Ok(r) => {
@@ -1278,28 +1332,31 @@ impl App {
             Err(mpsc::TryRecvError::Empty) => true,
             Err(mpsc::TryRecvError::Disconnected) => false,
         });
-        for (id, ok) in done {
+        for (kind, id, ok) in done {
             if ok {
-                self.card_art.insert(id);
-            } else if self.cards.art.watch == Some(id) {
+                match kind {
+                    Art::Card => self.card_art.insert(id),
+                    Art::Uma => self.uma_art.insert(id),
+                };
+            } else if kind == Art::Card && self.cards.art.watch == Some(id) {
                 self.toast("Saved, but the card art couldn't be downloaded; it shows as a placeholder.", crate::ui_util::ToastKind::Error);
             }
-            if self.cards.art.watch == Some(id) {
+            if kind == Art::Card && self.cards.art.watch == Some(id) {
                 self.cards.art.watch = None;
             }
         }
         let Some(root) = self.root.clone() else { return };
         while self.cards.art.running.len() < 4 {
-            let Some(id) = self.cards.art.pending.pop_front() else { break };
-            let dir = root.join("app").join("assets").join("cards");
+            let Some((kind, id)) = self.cards.art.pending.pop_front() else { break };
+            let dir = root.join("app").join("assets").join(kind.dir());
             let (tx, rx) = mpsc::channel();
             let ctx = ctx.clone();
             std::thread::spawn(move || {
+                let _ = std::fs::create_dir_all(&dir);
                 let path = dir.join(format!("{id}.webp"));
                 let part = dir.join(format!("{id}.webp.part"));
-                let url = format!("https://uma.guide/img/card/composite/tex_support_card_{id}_thumb.webp");
                 let mut cmd = std::process::Command::new(crate::ask::CURL);
-                cmd.args(["-sSfL", "--max-time", "60", "-o"]).arg(&part).arg(&url);
+                cmd.args(["-sSfL", "--max-time", "60", "-o"]).arg(&part).arg(kind.url(id));
                 crate::ask::hidden(&mut cmd);
                 let ok = cmd.status().is_ok_and(|s| s.success())
                     && std::fs::read(&part).ok().is_some_and(|b| image::load_from_memory_with_format(&b, image::ImageFormat::WebP).is_ok())
@@ -1307,7 +1364,7 @@ impl App {
                 if !ok {
                     let _ = std::fs::remove_file(&part);
                 }
-                let _ = tx.send((id, ok));
+                let _ = tx.send((kind, id, ok));
                 ctx.request_repaint();
             });
             self.cards.art.running.push(rx);
@@ -1509,6 +1566,33 @@ fn short_effect(name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every uma and card in the knowledge data ships with its art, so nothing shows as a
+    /// placeholder. `tools/update_knowledge.py` downloads the art of new ones; run it again if
+    /// this fails.
+    #[test]
+    fn every_uma_and_card_has_art() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let kb = crate::knowledge::Knowledge::load(Some(&root));
+        let missing: Vec<String> = kb
+            .umas
+            .keys()
+            .map(|id| ("umas", *id))
+            .chain(kb.cards.keys().map(|id| ("cards", *id)))
+            .filter(|(dir, id)| !root.join("app/assets").join(dir).join(format!("{id}.webp")).is_file())
+            .map(|(dir, id)| format!("{dir}/{id}"))
+            .collect();
+        assert!(missing.is_empty(), "no art for {} (run tools/update_knowledge.py): {:?}", missing.len(), &missing[..missing.len().min(10)]);
+    }
+
+    #[test]
+    fn art_urls_follow_uma_guide() {
+        // Checked against uma.guide on 2026-10-28: Special Week's icon is byte for byte the bundled one.
+        assert_eq!(Art::Uma.url(100101), "https://uma.guide/icon/uma/chr_icon_1001_100101_01.webp");
+        assert_eq!(Art::Card.url(10001), "https://uma.guide/img/card/composite/tex_support_card_10001_thumb.webp");
+        assert_eq!((Art::Uma.dir(), Art::Card.dir()), ("umas", "cards"));
+    }
+
     use super::*;
 
     /// The Cards table sorts by an effect at the owned level and by type; the LB chips, effect
