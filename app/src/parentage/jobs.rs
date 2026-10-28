@@ -179,7 +179,7 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
     let mut one: BTreeMap<u32, Cand> = BTreeMap::new();
     // The best careers per (pink, stars brought, green): candidates for two-step routes.
     let mut two: ByJob = BTreeMap::new();
-    for_each_cand(kb, goal, inv, &need, |c| {
+    for_each_cand(kb, goal, inv, &need, None, |c| {
         let green_needed = goal.green.is_some() && !c.green;
         let req: Vec<u32> = need.iter().zip(&c.brings).map(|((_, n), b)| n.saturating_sub(*b)).collect();
         let ok = pinned(c);
@@ -240,9 +240,103 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
         steps.sort_by(|x, y| y.careers().total_cmp(&x.careers()));
         out.steps = steps;
     }
+    // Nothing under the cap: try two generations, step 1's product as one of step 2's parents.
+    if (out.over_cap || out.steps.is_empty()) && pin.is_empty()
+        && let Some((r1, r2, w, l)) = two_generations(kb, goal, inv, &need, &two)
+    {
+        out.over_cap = false;
+        out.steps = vec![r1, r2];
+        out.partner = w;
+        out.after = Some(l);
+    }
     let chosen: Vec<u32> = out.steps.iter().map(|s| s.trainee).collect();
     out.alternatives = singles.iter().filter(|c| !chosen.contains(&c.trainee) && fits(&c.careers())).take(3).map(|c| to_run(kb, goal, inv, c).0).collect();
     out
+}
+
+/// What a friend's legacy would need to bring for the runner to start at A today: which of the
+/// player's finished umas she'd pair with, the pink stars she (with her two parents) must carry
+/// per target, whether she must carry the wanted unique, and the characters with the most
+/// affinity to the runner and that partner (best first). The player looks for one among their
+/// friends and adds her as a borrow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorrowWish {
+    pub partner: u64,
+    pub stars: Vec<(usize, u32)>,
+    pub green: Option<u32>,
+    pub charas: Vec<(u32, u32)>,
+    /// Whether one legacy line can carry it: she and her two parents have one pink each, at
+    /// most 3★, so the stars need at most three pinks.
+    pub possible: bool,
+}
+
+pub fn borrow_wish(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Option<BorrowWish> {
+    let need = goal.need(kb).ok()?;
+    // The partner that leaves the least for the friend to bring, then the best affinity to the runner.
+    let w = inv
+        .parents
+        .iter()
+        .filter(|p| goal.allows(p) && !super::is_borrowed(p.id))
+        .min_by_key(|p| {
+            let short: u32 = need.iter().map(|(i, n)| n.saturating_sub(u32::from(p.pink_line[*i]))).sum();
+            let green = goal.green.is_some_and(|g| p.green.is_some_and(|(u, _)| u == g));
+            (short, !green, std::cmp::Reverse(kb.affinity.pair(goal.runner, p.uma)))
+        })?;
+    let stars: Vec<(usize, u32)> = need.iter().map(|(i, n)| (*i, n.saturating_sub(u32::from(w.pink_line[*i])))).filter(|(_, n)| *n > 0).collect();
+    let green = goal.green.filter(|g| !w.green.is_some_and(|(u, _)| u == *g));
+    let mut charas: Vec<(u32, u32)> = kb
+        .affinity
+        .members
+        .keys()
+        .filter(|c| **c != chara(goal.runner) && **c != w.chara() && kb.umas.keys().any(|u| chara(*u) == **c))
+        .map(|c| (*c, kb.affinity.pair(goal.runner, *c) + kb.affinity.pair(w.uma, *c)))
+        .collect();
+    charas.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    charas.truncate(5);
+    let pinks: u32 = stars.iter().map(|(_, n)| n.div_ceil(3)).sum();
+    Some(BorrowWish { partner: w.id, stars, green, charas, possible: pinks <= 3 })
+}
+
+/// The id step 1's product stands under while step 2 is planned with her as a parent.
+pub const FROM_STEP: u64 = u64::MAX - 3000;
+
+/// Two generations: for the cheapest first steps (one per kind of product), add her product as
+/// a parent and plan a second step that runs with her, paired with a finished uma or with the
+/// first product itself. The cheapest under the cap, or None.
+fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], two: &ByJob) -> Option<(Run, Run, Option<u64>, Lineage)> {
+    let mut firsts: Vec<&Cand> = two.values().filter_map(|l| l.first()).filter(|c| c.careers() <= CAP).collect();
+    firsts.sort_by(|a, b| a.careers().total_cmp(&b.careers()));
+    let mut best: Option<(f64, Run, Run, Option<u64>, Lineage)> = None;
+    for c1 in firsts.into_iter().take(40) {
+        let (r1, mut p1) = to_run(kb, goal, inv, c1);
+        p1.id = FROM_STEP;
+        let mut inv2 = inv.clone();
+        inv2.parents.push(p1);
+        let at = inv2.parents.len() - 1;
+        let partners = Partners::new(goal, need, &inv2.parents, None);
+        let mut second: Option<Cand> = None;
+        for_each_cand(kb, goal, &inv2, need, Some(at), |c| {
+            let total = c1.careers() + c.careers();
+            if c.careers() > CAP || chara(c.trainee) == chara(c1.trainee) || best.as_ref().is_some_and(|b| total >= b.0) {
+                return;
+            }
+            // Her green only counts as the runner's own legacy, which the partner check covers.
+            let green_needed = goal.green.is_some() && !c.green;
+            let req: Vec<u32> = need.iter().zip(&c.brings).map(|((_, n), b)| n.saturating_sub(*b)).collect();
+            if partners.exists(&req, green_needed, chara(c.trainee)) && second.as_ref().is_none_or(|o| c.better(o)) {
+                second = Some(c.clone());
+            }
+        });
+        let Some(c2) = second else { continue };
+        let (r2, product) = to_run(kb, goal, &inv2, &c2);
+        let req: Vec<u32> = need.iter().zip(&c2.brings).map(|((_, n), b)| n.saturating_sub(*b)).collect();
+        let Some(w) = partners.best(kb, goal, &inv2, &product, &req, goal.green.is_some() && !c2.green) else { continue };
+        let l = score(kb, goal, &[product, inv2.parents[w].clone()], [0, 1]);
+        if l.meets() {
+            best = Some((c1.careers() + c2.careers(), r1, r2, Some(inv2.parents[w].id), l));
+        }
+    }
+    best.map(|(_, r1, r2, w, l)| (r1, r2, w, l))
 }
 
 /// Keep the three best candidates per key, with different trainees, so two steps can always differ.
@@ -262,7 +356,7 @@ fn keep_best(map: &mut ByJob, c: &Cand) {
 /// Every useful parent career: each owned trainee (not the runner's character) with each pair
 /// of finished umas she may run with, for each pink on a target she can make at each star count,
 /// and for no pink at all (when what her parents bring is enough).
-fn for_each_cand(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], mut f: impl FnMut(&Cand)) {
+fn for_each_cand(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], with: Option<usize>, mut f: impl FnMut(&Cand)) {
     let ps = &inv.parents;
     let aff = &kb.affinity;
     for &(t, stars) in &inv.owned {
@@ -279,7 +373,10 @@ fn for_each_cand(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u
                 continue;
             }
             for b in a + 1..ps.len() {
-                if ps[b].chara() == chara(t) || ps[b].chara() == ps[a].chara() {
+                if ps[b].chara() == chara(t) || ps[b].chara() == ps[a].chara() || (super::is_borrowed(ps[a].id) && super::is_borrowed(ps[b].id)) {
+                    continue;
+                }
+                if with.is_some_and(|w| a != w && b != w) {
                     continue;
                 }
                 let (pa, pb) = (&ps[a], &ps[b]);
@@ -489,6 +586,43 @@ mod tests {
         assert!(p.steps.iter().all(|s| s.careers() <= CAP) && !p.over_cap);
     }
 
+    /// A friend's Dirt legacy closes the gap today; two borrowed legacies never pair.
+    #[test]
+    fn borrowed_legacy() {
+        let kb = kb();
+        let turf = spark(&kb, "pink", "Turf", 2);
+        let goal = Goal { runner: 100601, targets: vec![1], ..Default::default() };
+        let mut i = inv(vec![parent(&kb, 1, 106801, vec![turf], [(100101, vec![]), (100201, vec![])])], vec![]);
+        assert!(propose(&kb, &goal, &i).now.is_none(), "one finished uma can't be two legacies");
+        let falcon = super::super::Borrow { uma: 104601, own: vec![spark(&kb, "pink", "Dirt", 2)], parents: [(100101, vec![]), (100201, vec![])] };
+        let id = i.borrow(&kb, &falcon);
+        assert!(super::super::is_borrowed(id));
+        let p = propose(&kb, &goal, &i);
+        assert!(p.now.as_ref().is_some_and(Lineage::meets) && p.steps.is_empty(), "{p:?}");
+        let id2 = i.borrow(&kb, &super::super::Borrow { uma: 105201, ..falcon.clone() });
+        let (a, b) = (i.by_id(id).unwrap(), i.by_id(id2).unwrap());
+        assert!(!pairable(&goal, a, b), "two borrowed legacies never pair");
+        assert!(super::super::parent_name(&kb, a).contains("borrowed"));
+    }
+
+    #[test]
+    fn borrow_wish_says_what_to_find() {
+        let kb = kb();
+        let dirt = spark(&kb, "pink", "Dirt", 1);
+        // Oguri for Dirt and End (D: 7 stars); the finished Kitasan brings one Dirt star.
+        let goal = Goal { runner: 100601, targets: vec![1, 9], ..Default::default() };
+        let i = inv(vec![parent(&kb, 1, 106801, vec![dirt], [(100101, vec![]), (100201, vec![])])], vec![]);
+        let w = borrow_wish(&kb, &goal, &i).unwrap();
+        assert_eq!(w.partner, 1);
+        assert_eq!(w.stars, vec![(9, 7)], "Dirt is covered; End needs all seven");
+        assert!(w.possible, "7 stars fit in three pinks (3★, 3★, 1★)");
+        let far = Goal { targets: vec![1, 5, 9], ..goal.clone() };
+        assert!(!borrow_wish(&kb, &far, &i).unwrap().possible, "Long B (1) and End D (7) need three pinks plus one");
+        assert_eq!(w.charas.len(), 5);
+        assert!(w.charas.iter().all(|(c, _)| *c != 1006 && *c != 1068));
+        assert!(w.charas.windows(2).all(|x| x[0].1 >= x[1].1));
+    }
+
     #[test]
     fn wants_read_sparks() {
         let kb = kb();
@@ -536,8 +670,8 @@ fn parentage_real_account() {
                         assert!(p.after.as_ref().is_some_and(Lineage::meets), "{name}: route doesn't meet the goal");
                         for s in &p.steps {
                             assert!(chara(s.trainee) != chara(runner), "{name}: runner's own character as a step");
-                            for id in s.legacies {
-                                assert!(inv.by_id(id).is_some_and(|l| l.chara() != chara(s.trainee)), "{name}: a step's legacy is her own character");
+                            for id in s.legacies.iter().filter(|id| **id != FROM_STEP) {
+                                assert!(inv.by_id(*id).is_some_and(|l| l.chara() != chara(s.trainee)), "{name}: a step's legacy is her own character");
                             }
                             assert!(p.over_cap || s.careers() <= CAP, "{name}: past the cap unmarked");
                         }

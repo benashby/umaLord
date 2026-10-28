@@ -35,10 +35,10 @@ impl Lineage {
     }
 }
 
-/// Whether two legacies may be paired for the goal: neither is the runner's character, and they
-/// are two different characters.
+/// Whether two legacies may be paired for the goal: neither is the runner's character, they
+/// are two different characters, and at most one is borrowed.
 pub fn pairable(goal: &Goal, a: &Parent, b: &Parent) -> bool {
-    goal.allows(a) && goal.allows(b) && a.chara() != b.chara()
+    goal.allows(a) && goal.allows(b) && a.chara() != b.chara() && !(super::is_borrowed(a.id) && super::is_borrowed(b.id))
 }
 
 /// Score one pair.

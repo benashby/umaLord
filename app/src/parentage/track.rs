@@ -42,6 +42,8 @@ pub struct ParentPlan {
     pub paused: bool,
     /// The player's pinned choice for the next step.
     pub pin: Pin,
+    /// Friends' legacies the player can borrow, which the plan may use.
+    pub borrows: Vec<super::Borrow>,
     /// The plan before its last change, for Undo (each holds its own, up to `UNDO` deep).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before: Option<Box<ParentPlan>>,
@@ -128,10 +130,13 @@ impl ParentPlan {
     /// The account's parents plus the ones checked off by hand, which the plan can already use.
     pub fn inventory(&self, kb: &Knowledge, inv: &Inventory) -> Inventory {
         let mut out = inv.clone();
+        for b in &self.borrows {
+            out.borrow(kb, b);
+        }
         for (i, s) in self.steps.iter().enumerate() {
             let (Some(own), None) = (&s.declared, s.done) else { continue };
-            let legs: Vec<&Parent> = s.run.legacies.iter().filter_map(|id| inv.by_id(*id)).collect();
-            if let [a, b] = legs[..] {
+            let legs: Vec<Parent> = s.run.legacies.iter().filter_map(|id| out.by_id(*id).cloned()).collect();
+            if let [a, b] = &legs[..] {
                 let mut p = Parent::planned(kb, s.run.trainee, own.clone(), a, b);
                 p.id = DECLARED + i as u64;
                 out.parents.push(p);
@@ -235,6 +240,14 @@ impl ParentPlan {
         self.snapshot();
         self.pin = pin;
         self.log.push(format!("{today}: {}.", if self.pin.is_empty() { "cleared the pinned choice" } else { "pinned a choice for the next step" }));
+        self.revalidate(kb, inv, vets, today)
+    }
+
+    /// Add a friend's legacy the plan may use, and plan again with it.
+    pub fn add_borrow(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], b: super::Borrow, today: &str) -> String {
+        self.snapshot();
+        self.log.push(format!("{today}: added a friend's {} to borrow.", super::uma_name(kb, b.uma)));
+        self.borrows.push(b);
         self.revalidate(kb, inv, vets, today)
     }
 

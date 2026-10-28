@@ -70,10 +70,21 @@ pub fn lineage(kb: &Knowledge, parents: &[&Parent], l: &Lineage) -> String {
     out + "."
 }
 
+/// A parent by id: a finished uma, a friend's, or the uma step 1 leaves.
+fn name_id(kb: &Knowledge, inv: &Inventory, id: u64) -> String {
+    if id == super::jobs::FROM_STEP {
+        return "the uma step 1 leaves".into();
+    }
+    inv.by_id(id).map_or(format!("#{id}"), |p| parent_name(kb, p))
+}
+
 fn step(kb: &Knowledge, inv: &Inventory, n: usize, r: &Run) -> String {
-    let legacies: Vec<String> = r.legacies.iter().map(|id| inv.by_id(*id).map_or(format!("#{id}"), |p| parent_name(kb, p))).collect();
+    let legacies: Vec<String> = r.legacies.iter().map(|id| name_id(kb, inv, *id)).collect();
     let labels = |ws: &[super::jobs::Want]| ws.iter().map(|w| w.label(kb)).collect::<Vec<_>>().join(", ");
     let mut out = format!("Step {n}: a career of {} with {} as her legacies.\n", uma_name(kb, r.trainee), legacies.join(" and "));
+    if r.legacies.iter().any(|id| super::is_borrowed(*id)) {
+        out += "  The borrowed legacy has to be borrowed again for every career of this step, while the friend still lists her.\n";
+    }
     out += &format!("  Must have: {}.", if r.must.is_empty() { "nothing beyond finishing it (her parents bring what's needed)".into() } else { labels(&r.must) });
     if !r.nice.is_empty() {
         let nice: Vec<String> = r.nice.iter().map(|w| w.odds(&inv.history).map_or_else(|| w.label(kb), |p| format!("{} ({} a career)", w.label(kb), pct(p)))).collect();
@@ -115,15 +126,16 @@ pub fn proposal(kb: &Knowledge, goal_: &Goal, inv: &Inventory, p: &Proposal, per
         out += &format!("Short of A at the start: {}.\n", short.join("; "));
     }
     if p.steps.is_empty() {
-        return out + "No route from the umas you own reaches it: borrow a friend's legacy with the missing pinks, pick another runner, or accept a lower grade.";
+        out += "No route from the umas you own reaches it: borrow a friend's legacy with the missing pinks, pick another runner, or accept a lower grade.";
+        return out + &borrow_text(kb, goal_, inv);
     }
     out += &format!("\nPlan (calculated from the game's spark rules; keep running each step until a finished uma has its must-haves; odds use the Wiki's grade-weighted pink rule, uma.guide's even rule as the best case; at most {CAP:.0} careers a step):\n");
     for (i, r) in p.steps.iter().enumerate() {
         out += &step(kb, inv, i + 1, r);
     }
     if let Some(l) = &p.after {
-        let names: Vec<String> = match p.partner.and_then(|id| inv.by_id(id)) {
-            Some(w) => vec![format!("step {}'s product", p.steps.len()), parent_name(kb, w)],
+        let names: Vec<String> = match p.partner {
+            Some(w) => vec![format!("step {}'s product", p.steps.len()), name_id(kb, inv, w)],
             None => vec!["the two steps' products".into()],
         };
         out += &format!("Then the runner's lineage: {} — affinity {} {}, every target at A at the start.\n", names.join(" + "), l.affinity, symbol(l.affinity));
@@ -135,6 +147,7 @@ pub fn proposal(kb: &Knowledge, goal_: &Goal, inv: &Inventory, p: &Proposal, per
     out += &format!(" Half the time it takes {mid} or fewer, nine times in ten {hi} or fewer (at least {lo}); with the best-case rule, {} and {}.", v.best.pctl[1], v.best.pctl[2]);
     if p.over_cap {
         out += &format!("\n⚠ Nothing fits under {CAP:.0} careers a step: this is the cheapest route anyway. Better options: borrow a friend's legacy with the missing pinks, pick another runner, or accept a lower grade.");
+        out += &borrow_text(kb, goal_, inv);
     }
     if !p.alternatives.is_empty() {
         out += "\nOther first steps: ";
@@ -143,6 +156,28 @@ pub fn proposal(kb: &Knowledge, goal_: &Goal, inv: &Inventory, p: &Proposal, per
         out += ".";
     }
     out
+}
+
+/// What to look for among friends' legacies, in plain words.
+pub fn borrow_text(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> String {
+    let Some(w) = super::jobs::borrow_wish(kb, goal, inv) else { return String::new() };
+    let mut want: Vec<String> = w.stars.iter().map(|(i, n)| format!("{n} {} pink star{}", APTITUDES[*i], if *n == 1 { "" } else { "s" })).collect();
+    if let Some(u) = w.green {
+        want.push(format!("{} as her own green", kb.sparks.get(&green_spark(u, 1)).map_or_else(|| uma_name(kb, u), |s| s.name.clone())));
+    }
+    let names: Vec<String> = w.charas.iter().map(|(c, _)| kb.umas.values().find(|u| crate::affinity::chara(u.id) == *c).map_or(format!("chara {c}"), |u| u.name.clone())).collect();
+    if !w.possible {
+        return format!(
+            "\nNo single friend's legacy can bring it either: {} needs more than three pinks, and a legacy line has three (her own and her two parents', 3★ at most). Pick a runner with better grades here, or a lower goal.",
+            want.join(" and ")
+        );
+    }
+    format!(
+        "\nTo borrow instead: pair {} with a friend's legacy carrying {} (counting her and her two parents). Characters with the most affinity here: {}. Add the one you find and the plan uses her.",
+        name_id(kb, inv, w.partner),
+        if want.is_empty() { "nothing more".into() } else { want.join(" and ") },
+        names.join(", ")
+    )
 }
 
 /// The saved plan: its steps, where it stands, and the finished umas that count for the
@@ -167,7 +202,7 @@ pub fn plan(kb: &Knowledge, plan: &ParentPlan, inv: &Inventory, vets: &[Veteran]
         }
     }
     if let Some(w) = plan.partner {
-        out += &format!("Then the last step's product pairs with {} as the runner's legacies.\n", inv.by_id(w).map_or(format!("#{w}"), |p| parent_name(kb, p)));
+        out += &format!("Then the last step's product pairs with {} as the runner's legacies.\n", name_id(kb, inv, w));
     }
     if plan.blocked.is_some() {
         return out;

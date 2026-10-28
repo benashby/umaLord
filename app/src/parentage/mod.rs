@@ -192,6 +192,35 @@ impl Inventory {
     pub fn by_id(&self, id: u64) -> Option<&Parent> {
         self.parents.iter().find(|p| p.id == id)
     }
+
+    /// Add a friend's legacy the player can borrow today: her outfit, sparks and her two
+    /// parents' (outfit and sparks). It joins the parents with a borrowed id; a lineage takes at
+    /// most one borrowed legacy.
+    pub fn borrow(&mut self, kb: &Knowledge, b: &Borrow) -> u64 {
+        let id = BORROWED + self.parents.iter().filter(|p| is_borrowed(p.id)).count() as u64;
+        let gp = |(u, _): &(u32, Vec<u32>)| crate::affinity::Ancestor { uma: *u, wins: Default::default() };
+        let legacy = crate::affinity::Legacy { uma: b.uma, wins: Default::default(), parents: [Some(gp(&b.parents[0])), Some(gp(&b.parents[1]))] };
+        let [x, y] = b.parents.clone();
+        self.parents.push(Parent::build(kb, id, b.uma, b.own.clone(), [Some(x), Some(y)], legacy));
+        id
+    }
+}
+
+/// A friend's legacy the player can borrow: her outfit, her sparks and her two parents'.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Borrow {
+    pub uma: u32,
+    pub own: Vec<u32>,
+    pub parents: [(u32, Vec<u32>); 2],
+}
+
+/// Ids for borrowed legacies (a friend's), well clear of the game's trained_chara_ids.
+const BORROWED: u64 = u64::MAX - 2000;
+
+/// Whether a parent is a friend's, borrowed for the day.
+pub fn is_borrowed(id: u64) -> bool {
+    (BORROWED..BORROWED + 1000).contains(&id)
 }
 
 /// "Oguri Cap [Starlight Beat]", or the id when the game data doesn't know it.
@@ -201,7 +230,13 @@ pub fn uma_name(kb: &Knowledge, uma: u32) -> String {
 
 /// "#812 Haru Urara [Bestest Prize ♪]", or a planned parent's trainee.
 pub fn parent_name(kb: &Knowledge, p: &Parent) -> String {
-    if p.id == 0 { format!("a new {}", uma_name(kb, p.uma)) } else { format!("#{} {}", p.id, uma_name(kb, p.uma)) }
+    if p.id == 0 {
+        format!("a new {}", uma_name(kb, p.uma))
+    } else if is_borrowed(p.id) {
+        format!("a friend's {} (borrowed)", uma_name(kb, p.uma))
+    } else {
+        format!("#{} {}", p.id, uma_name(kb, p.uma))
+    }
 }
 
 #[cfg(test)]
