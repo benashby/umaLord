@@ -365,7 +365,7 @@ pub fn pill(ui: &mut egui::Ui, text: RichText, fill: Color32, stroke: Stroke) ->
     pill_padded(ui, text, fill, stroke, vec2(16.0, 6.0))
 }
 
-fn pill_padded(ui: &mut egui::Ui, text: RichText, fill: Color32, stroke: Stroke, pad: Vec2) -> Response {
+pub fn pill_padded(ui: &mut egui::Ui, text: RichText, fill: Color32, stroke: Stroke, pad: Vec2) -> Response {
     let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
     let size = galley.size() + pad;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());

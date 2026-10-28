@@ -6,8 +6,7 @@
 
 use crate::App;
 use crate::parentage::brief::Brief;
-use crate::parentage::saved::{Built, QueueRow};
-use crate::parentage::team::CmTeam;
+use crate::parentage::saved::Built;
 use crate::parentage::tt::TtTeam;
 use crate::theme::{pal, size};
 use crate::ui_util::semibold;
@@ -18,7 +17,7 @@ const WIDE: f32 = 1200.0;
 const ACTION_W: f32 = 480.0;
 const PANE_GAP: f32 = 24.0;
 /// Prose stops at about 80 characters a line (WCAG 1.4.8).
-const PROSE_W: f32 = 580.0;
+pub(crate) const PROSE_W: f32 = 580.0;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(crate) enum LineageView {
@@ -156,137 +155,81 @@ impl App {
             prose(ui, "No upcoming Champions Meeting is in the schedule yet.", 14.0, pal(ui).weak);
             return;
         };
-        let Some(plan) = self.team_plans().get(which).cloned() else {
-            self.plan_alone(ui, which);
-            return;
-        };
-        let Built::Cm { team, queue, borrows, .. } = plan.built.clone() else { return };
-        // The plan bar leads the overview pane; in one column it comes first.
-        let wide = ui.available_width() >= WIDE;
-        let next = plan.next().map(|c| c.brief.clone());
-        self.panes(
-            ui,
-            |_, ui| {
-                let e = &team.event;
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(semibold(format!("CM {} {} team", e.id, e.name), size::XL));
-                    pill(ui, &e.course_name, pal(ui).accent);
-                    ui.label(RichText::new(format!("{} · {} days away{}", e.date, team.days_left, if e.announced { "" } else { " (estimated)" })).size(13.0).color(pal(ui).weak));
-                });
-            },
-            |this, ui| {
-                if !wide {
-                    this.plan_lead(ui, which);
-                }
-                this.next_or_done(ui, next.as_ref());
-            },
-            |this, ui| {
-                if wide {
-                    this.plan_lead(ui, which);
-                }
-                this.today_row(ui, &team);
-                ui.add_space(12.0);
-                this.runner_cards(ui, &team, &borrows);
-                ui.add_space(12.0);
-                this.queue_card(ui, &queue, &team);
-                for n in &team.notes {
-                    ui.label(RichText::new(format!("⚠ {n}")).size(12.5).color(pal(ui).warn));
-                }
-                this.plan_chosen(ui, which);
-            },
-        );
+        self.plan_view(ui, which);
     }
 
     fn lineage_tt(&mut self, ui: &mut egui::Ui) {
-        let which = crate::parentage::saved::Which::Tt;
+        self.plan_view(ui, crate::parentage::saved::Which::Tt);
+    }
+
+    /// A saved plan laid out: the open step's card in the action pane; the plan bar, what it's
+    /// for, the steps, the 564 note, the team before and after and how it was chosen beside it.
+    /// In one column the plan bar comes first and a step's card opens under its row.
+    fn plan_view(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
         let Some(plan) = self.team_plans().get(which).cloned() else {
             self.plan_alone(ui, which);
             return;
         };
-        let Built::Tt { team, lengths, .. } = plan.built.clone() else { return };
         let wide = ui.available_width() >= WIDE;
-        let next = plan.next().map(|c| c.brief.clone());
         let p = pal(ui);
-        let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
-        let next2 = next.clone();
         self.panes(
             ui,
-            |_, ui| {
+            |this, ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(semibold(format!("Team Trials · {runners} runners"), size::XL));
-                    pill(ui, &format!("{} races × 3", team.rows.len()), p.accent);
-                    ui.label(RichText::new("Each race: what you can field today, the plan, and the gain on it.").size(13.0).color(p.weak));
+                    if ui.link(RichText::new("Overview").size(12.5)).clicked() {
+                        this.lineage.view = LineageView::Overview;
+                    }
+                    ui.label(RichText::new("›").size(12.5).color(p.weak));
+                    match &plan.built {
+                        Built::Cm { team, .. } => {
+                            let e = &team.event;
+                            ui.label(semibold(format!("CM {} {} team", e.id, e.name), size::LG));
+                            pill(ui, &e.course_name, p.accent);
+                            ui.label(RichText::new(format!("Round 1 on {} · {} days away{}", crate::lineage_plans::when(&e.date), crate::tab_planner::days_apart(&e.date, &crate::ui_util::today()).max(0), if e.announced { "" } else { " (estimated)" })).size(12.5).color(p.weak));
+                        }
+                        Built::Tt { team, .. } => {
+                            let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
+                            ui.label(semibold(format!("Team Trials · {runners} runners"), size::LG));
+                            pill(ui, &format!("{} races × 3", team.rows.len()), p.accent);
+                        }
+                    }
                 });
             },
             |this, ui| {
-                if !wide {
+                if wide {
+                    this.open_step_card(ui, which, &plan);
+                } else {
                     this.plan_lead(ui, which);
                 }
-                this.next_or_done(ui, next2.as_ref());
             },
             |this, ui| {
                 if wide {
                     this.plan_lead(ui, which);
                 }
-                this.tt_overview(ui, &team, &next, &lengths);
+                this.plan_summary(ui, &plan);
+                ui.add_space(12.0);
+                this.plan_steps(ui, which, &plan, wide);
+                ui.add_space(12.0);
+                if let Built::Tt { team, .. } = &plan.built {
+                    this.tt_inherit_card(ui, team);
+                }
+                this.before_after(ui, &plan);
+                let notes: Vec<String> = match &plan.built {
+                    Built::Cm { team, .. } => team.notes.clone(),
+                    Built::Tt { team, .. } => team.notes.clone(),
+                };
+                for n in &notes {
+                    ui.add(egui::Label::new(RichText::new(format!("⚠ {n}")).size(12.5).color(pal(ui).warn)).wrap());
+                }
                 this.plan_chosen(ui, which);
             },
         );
     }
 
-    /// The plan bar, and the build log under it while the plan is being made again.
-    fn plan_lead(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
-        self.plan_bar(ui, which);
-        ui.add_space(12.0);
-        if self.plan_building(which) {
-            self.build_log(ui, which);
-            ui.add_space(12.0);
-        }
-    }
-
-    /// A view with no saved plan: the build log while one is being made, else the empty state.
-    fn plan_alone(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
-        egui::ScrollArea::vertical().id_salt("lineage_alone").auto_shrink([false, false]).show(ui, |ui| {
-            if self.plan_building(which) {
-                self.build_log(ui, which);
-            } else {
-                self.plan_empty(ui, which);
-            }
-        });
-    }
-
-    /// The Next career card, or a note when every career in the plan is done.
-    fn next_or_done(&mut self, ui: &mut egui::Ui, next: Option<&Brief>) {
-        match next {
-            Some(b) => self.next_card(ui, b),
-            None => {
-                crate::ui_util::card(ui, |ui| {
-                    ui.label(semibold("Every career in this plan is done", size::MD));
-                    prose(ui, "Re-plan to see whether another career would still raise the team, or plan for the next event.", 13.0, pal(ui).weak);
-                });
-            }
-        }
-    }
-
-    fn tt_overview(&mut self, ui: &mut egui::Ui, team: &TtTeam, next: &Option<Brief>, lengths: &[String]) {
+    /// Team Trials: 564 Escapades, which every runner should inherit, and who needs a friend's
+    /// Summer Gold Ship for it.
+    pub(crate) fn tt_inherit_card(&mut self, ui: &mut egui::Ui, team: &TtTeam) {
         let p = pal(ui);
-        if team.today_total > 0.0 {
-            crate::ui_util::card(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("THE TEAM").size(11.5).strong().color(p.weak));
-                    ui.add_space(12.0);
-                    let mut job = egui::text::LayoutJob::default();
-                    let font = |sz: f32, bold: bool| if bold { FontId::new(sz, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())) } else { FontId::proportional(sz) };
-                    let mut add = |t: &str, bold: bool, c: Color32, sz: f32| job.append(t, 0.0, egui::TextFormat { font_id: font(sz, bold), color: c, ..Default::default() });
-                    add("Today about ", false, p.text, 14.0);
-                    add(&thousands((team.today_total / 1000.0).round() * 1000.0), true, p.text, 14.0);
-                    add("; raced together, the plan beats it by ", false, p.text, 14.0);
-                    add(&format!("about +{}", thousands((team.gain / 1000.0).round() * 1000.0)), true, p.good, 14.0);
-                    ui.label(job);
-                });
-            });
-            ui.add_space(10.0);
-        }
         // 564 Escapades (the community's inherit for every runner): who needs a friend's Summer
         // Gold Ship as a parent, and on request what to look for and who to pair her with.
         let needs: Vec<(u32, String)> = team.rows.iter().flat_map(|r| r.slots.iter()).filter_map(|s| s.notes.iter().find(|n| n.contains("Summer Gold Ship")).map(|n| (s.trainee, n.split("pair her with ").nth(1).and_then(|x| x.split(" instead").next()).unwrap_or("").to_string()))).collect();
@@ -295,11 +238,28 @@ impl App {
             let open = self.lineage.look_for.as_ref() == Some(&key);
             let mut toggle = false;
             crate::ui_util::card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("ONE SKILL EVERY RUNNER WANTS").size(12.0).strong().color(p.weak));
+                ui.add_space(4.0);
+                let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
                 ui.horizontal_wrapped(|ui| {
                     crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Green, "564 Escapades", 0, Some(1), false, true);
-                    let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
-                    ui.add(egui::Label::new(RichText::new(format!("{} of {runners} runners need a friend's Summer Gold Ship as a parent (every runner should inherit 564 Escapades, the community says).", needs.len())).size(13.0)).wrap());
                 });
+                ui.add_space(4.0);
+                crate::lineage_steps::rich(
+                    ui,
+                    &[
+                        crate::lineage_steps::Span::t("Most Team Trials players give every runner the skill "),
+                        crate::lineage_steps::Span::b("564 Escapades"),
+                        crate::lineage_steps::Span::t(". A runner can only learn it by "),
+                        crate::lineage_steps::Span::term("inheriting", "inherit"),
+                        crate::lineage_steps::Span::t(" it from "),
+                        crate::lineage_steps::Span::b("Summer Gold Ship"),
+                        crate::lineage_steps::Span::t(&format!(" as a parent. Borrow a friend's Summer Gold Ship for {} of your {runners} runners.", needs.len())),
+                    ],
+                    14.0,
+                    PROSE_W,
+                );
                 if ui.link(if open { "Hide" } else { "What to look for" }).clicked() {
                     toggle = true;
                 }
@@ -326,255 +286,39 @@ impl App {
             }
             ui.add_space(10.0);
         }
-        crate::ui_util::card(ui, |ui| {
-            let w = ui.available_width();
-            let narrow = w < 1000.0;
-            let (race_w, gain_w) = (110.0, 80.0);
-            let rest = w - race_w - gain_w - 3.0 * ui.spacing().item_spacing.x - 4.0;
-            let (today_w, plan_w) = if narrow { (rest, rest) } else { (rest * 0.47, rest * 0.53) };
-            let head = |ui: &mut egui::Ui, text: &str, width: f32| {
-                let (r, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
-                ui.painter().text(r.left_center(), Align2::LEFT_CENTER, text, FontId::new(12.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), p.weak);
-            };
-            ui.horizontal(|ui| {
-                head(ui, "Race", race_w);
-                head(ui, if narrow { "Today, then the plan" } else { "Today (what you can field)" }, today_w);
-                if !narrow {
-                    head(ui, "The plan", plan_w);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Gain").size(12.0).strong().color(p.weak));
-                });
-            });
-            for (row, len) in team.rows.iter().zip(lengths) {
-                ui.separator();
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(vec2(race_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_width(race_w);
-                        ui.label(semibold(row.name, 14.5));
-                        ui.label(RichText::new(len).size(12.0).color(p.weak));
-                    });
-                    let today_names: Vec<u32> = row.today.iter().map(|t| t.0.outfit).collect();
-                    let today_ui = |ui: &mut egui::Ui| {
-                        if row.today.is_empty() {
-                            ui.label(RichText::new("none of your finished umas can run it").size(12.5).color(p.weak));
-                        }
-                        let items: Vec<Who> = row.today.iter().map(|(t, pts)| Who { uma: t.outfit, name: format!("#{} {}", t.vet, short_name(&self.kb, t.outfit)), note: format!("~{}", thousands(*pts)), note_color: p.weak, hover: None }).collect();
-                        self.who_flow(ui, &items);
-                    };
-                    let plan_ui = |ui: &mut egui::Ui| {
-                        let items: Vec<Who> = row
-                            .slots
-                            .iter()
-                            .map(|s| {
-                                let tag = if today_names.contains(&s.trainee) { "as today" } else { "new career" };
-                                let shaky = s.notes.iter().any(|n| n.contains("unreliably"));
-                                let replaced_by = next.as_ref().filter(|b| b.replaces == Some(s.trainee)).map(|b| short_name(&self.kb, b.trainee));
-                                let note = match (s.ace, shaky) {
-                                    _ if replaced_by.is_some() => format!("⚠ to be replaced by {} (next career)", replaced_by.unwrap_or_default()),
-                                    (_, true) => format!("⚠ unreliable unique · {tag}"),
-                                    (true, _) => format!("★ Ace · {tag}"),
-                                    _ => tag.to_string(),
-                                };
-                                let hover = s.plan.friend.and_then(|f| self.kb.cards.get(&f)).map(|c| format!("Borrows {} [{}] (MLB) from a friend", c.uma, c.title));
-                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky || note_is_replace(&s.trainee, &next) { p.warn } else if s.ace { p.gold } else { p.weak }, hover }
-                            })
-                            .collect();
-                        self.who_flow(ui, &items);
-                    };
-                    if narrow {
-                        ui.allocate_ui_with_layout(vec2(today_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.set_width(today_w);
-                            today_ui(ui);
-                            ui.label(RichText::new("Plan").size(11.5).strong().color(p.weak));
-                            plan_ui(ui);
-                        });
-                    } else {
-                        ui.allocate_ui_with_layout(vec2(today_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.set_width(today_w);
-                            today_ui(ui);
-                        });
-                        ui.allocate_ui_with_layout(vec2(plan_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.set_width(plan_w);
-                            plan_ui(ui);
-                        });
-                    }
-                    // A fixed cell: a layout here would take the whole page's height.
-                    let (cell, _) = ui.allocate_exact_size(vec2(gain_w, 24.0), Sense::hover());
-                    let (text, color) = match row.gain {
-                        Some(g) => (format!("{}{}", if g >= 0.0 { "+" } else { "" }, thousands(g)), if g >= 0.0 { p.good } else { p.warn }),
-                        None => ("—".to_string(), p.weak),
-                    };
-                    ui.painter().text(cell.right_center(), Align2::RIGHT_CENTER, text, FontId::new(15.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), color);
-                });
-            }
-            ui.separator();
-            ui.label(RichText::new("Points per round, raced in the simulator (an estimate: the real races have twelve runners). — : not raced, no finished uma of yours can run it.").size(12.0).color(p.weak));
-        });
-        for n in team.notes.iter().filter(|n| !n.starts_with("Scores are estimates")) {
-            ui.label(RichText::new(n).size(12.0).color(p.weak));
+    }
+
+    /// The plan bar, and the build log under it while the plan is being made again.
+    fn plan_lead(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
+        self.plan_bar(ui, which);
+        ui.add_space(12.0);
+        if self.plan_building(which) {
+            self.build_log(ui, which);
+            ui.add_space(12.0);
         }
     }
 
-    /// "What you can field today": the best of the player's finished umas as they are.
-    fn today_row(&self, ui: &mut egui::Ui, team: &CmTeam) {
-        crate::ui_util::card(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("TODAY").size(11.5).strong().color(pal(ui).weak));
-                ui.label(semibold("What you can field today:", 14.0));
-                if team.today.is_empty() {
-                    ui.label(RichText::new("none of your finished umas can run this course yet").color(pal(ui).weak));
-                }
-            });
-            let items: Vec<Who> = team.today.iter().map(|t| Who { uma: t.outfit, name: format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit)), note: t.share.map_or(String::new(), |s| format!("wins {:.0}%", s * 100.0)), note_color: pal(ui).weak, hover: None }).collect();
-            self.who_flow(ui, &items);
-            prose(ui, "The best team from your finished umas as they are: their own stats, skills and aptitudes, raced in the simulator. The plan's gains are measured against it.", 12.0, pal(ui).weak);
-        });
-    }
-
-    fn runner_cards(&mut self, ui: &mut egui::Ui, team: &CmTeam, borrows: &[(Option<String>, Vec<(u32, String)>)]) {
-        let n = team.runners.len().max(1);
-        // Three across from 900 px of overview (about 290 px a card), else stacked.
-        let narrow = ui.available_width() < 900.0;
-        let open = self.lineage.look_for.clone();
-        let mut toggle: Option<String> = None;
-        let mut draw = |ui: &mut egui::Ui, r: &crate::parentage::team::Runner, ace: bool, k: usize| {
-            crate::ui_util::card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    self.avatar(ui, r.trainee, 48.0);
-                    ui.vertical(|ui| {
-                        // Name and Ace wrap together inside the card's width.
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add(egui::Label::new(semibold(crate::parentage::uma_name(&self.kb, r.trainee), 15.0)).wrap());
-                            if ace {
-                                pill(ui, "★ Ace", pal(ui).gold);
-                            }
-                        });
-                        let today = team.today.iter().find(|t| t.outfit == r.trainee).map(|t| format!(" · #{} as today", t.vet)).unwrap_or_default();
-                        ui.label(RichText::new(format!("{}{}{today}", r.style.label(), if r.meta_pick { " · the sheet's pick" } else { "" })).size(12.5).color(pal(ui).weak));
-                    });
-                });
-                egui::Frame::new().fill(pal(ui).raised).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Against today's best she wins").size(13.5).color(pal(ui).weak));
-                        match r.vs_today {
-                            Some(v) => ui.label(semibold(format!("{:.0}%", v * 100.0), 20.0)),
-                            None => ui.label(semibold("—", 20.0)).on_hover_text("Not raced: none of your finished umas can run this course"),
-                        };
-                    });
-                });
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    for c in r.plan.deck.iter().flatten() {
-                        self.card_art(ui, *c, 45.0, false);
-                    }
-                    if let Some(f) = r.plan.friend
-                        && self.card_art(ui, f, 45.0, true).on_hover_text("Click: what to look for").clicked()
-                    {
-                        toggle = Some(format!("runner:{k}"));
-                    }
-                });
-                if let Some(f) = r.plan.friend
-                    && borrow_chip(ui, &self.kb, f, open.as_deref() == Some(&format!("runner:{k}")))
-                {
-                    toggle = Some(format!("runner:{k}"));
-                }
-                if let (Some(f), true) = (r.plan.friend, open.as_deref() == Some(&format!("runner:{k}"))) {
-                    let (why, alts) = borrows.get(k).cloned().unwrap_or_default();
-                    self.borrow_look_for(ui, f, why.as_deref(), &alts);
-                }
-                let lineage = if r.parents.now.as_ref().is_some_and(crate::parentage::score::Lineage::meets) {
-                    "Her lineage is ready.".to_string()
-                } else if r.parents.steps.is_empty() {
-                    "No lineage reaches her targets under the cap yet.".to_string()
-                } else {
-                    format!("Waiting on {} parent step{}.", r.parents.steps.len(), if r.parents.steps.len() == 1 { "" } else { "s" })
-                };
-                ui.label(RichText::new(lineage).size(12.5).color(pal(ui).weak));
-            });
-        };
-        let ace = team.runners.iter().enumerate().filter_map(|(i, r)| r.sim.map(|s| (i, s.0))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0);
-        if narrow {
-            for (i, r) in team.runners.iter().enumerate() {
-                draw(ui, r, ace == Some(i), i);
-                ui.add_space(8.0);
-            }
-        } else {
-            ui.columns(n, |cols| {
-                for (i, (col, r)) in cols.iter_mut().zip(&team.runners).enumerate() {
-                    col.with_layout(egui::Layout::top_down(egui::Align::Min), |col| draw(col, r, ace == Some(i), i));
-                }
-            });
-        }
-        if let Some(k) = toggle {
-            self.lineage.look_for = if self.lineage.look_for.as_ref() == Some(&k) { None } else { Some(k) };
-        }
-    }
-
-    fn queue_card(&mut self, ui: &mut egui::Ui, queue: &[QueueRow], team: &CmTeam) {
-        let open = self.lineage.look_for.clone();
-        let mut toggle: Option<String> = None;
-        crate::ui_util::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(semibold("Parent queue", 15.5));
-                ui.label(RichText::new(format!("{} step{} · time for about {} careers before the CM", queue.len(), if queue.len() == 1 { "" } else { "s" }, team.budget.round())).size(12.5).color(pal(ui).weak));
-            });
-            if queue.is_empty() {
-                ui.label(RichText::new("No parent careers needed: train the three.").color(pal(ui).weak));
-            }
-            for (k, q) in queue.iter().enumerate() {
-                egui::Frame::new().fill(pal(ui).raised).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        pill(ui, &if k == 0 { format!("Step {} · ▶ Current", k + 1) } else { format!("Step {} · Next", k + 1) }, pal(ui).accent);
-                        ui.label(RichText::new("⏳").size(13.0)).on_hover_text("Independent Training: a parent career runs in the background");
-                        self.avatar(ui, q.trainee, 32.0);
-                        ui.vertical(|ui| {
-                            ui.label(semibold(format!("{} as {}", crate::parentage::uma_name(&self.kb, q.trainee), q.style), 13.5));
-                            ui.add(egui::Label::new(RichText::new(format!("For {}: {}", crate::parentage::uma_name(&self.kb, q.for_runner), q.what)).size(12.0).color(pal(ui).weak)).wrap());
-                        });
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add_space(4.0);
-                        let items: Vec<Who> = q.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: if *id == 0 { "any legacy".into() } else { format!("#{id} {}", short_name(&self.kb, *uma)) }, note: String::new(), note_color: pal(ui).weak, hover: None }).collect();
-                        self.who_flow(ui, &items);
-                        ui.label(RichText::new("· Trackblazer ·").size(12.5).color(pal(ui).weak));
-                        ui.label(semibold(&q.careers, 13.0));
-                    });
-                    if !q.deck.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
-                            for c in &q.deck {
-                                self.card_art(ui, *c, 24.0, false);
-                            }
-                            if let Some(f) = q.friend
-                                && self.card_art(ui, f, 24.0, true).on_hover_text("Click: what to look for").clicked()
-                            {
-                                toggle = Some(format!("queue:{k}"));
-                            }
-                            if let Some(f) = q.friend
-                                && borrow_chip(ui, &self.kb, f, open.as_deref() == Some(&format!("queue:{k}")))
-                            {
-                                toggle = Some(format!("queue:{k}"));
-                            }
-                        });
-                    }
-                    if let (Some(f), true) = (q.friend, open.as_deref() == Some(&format!("queue:{k}"))) {
-                        self.borrow_look_for(ui, f, q.friend_why.as_deref(), &q.friend_alts);
-                    }
-                });
-                ui.add_space(4.0);
+    /// A view with no saved plan: the build log while one is being made, else the empty state.
+    fn plan_alone(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
+        egui::ScrollArea::vertical().id_salt("lineage_alone").auto_shrink([false, false]).show(ui, |ui| {
+            if self.plan_building(which) {
+                self.build_log(ui, which);
+            } else {
+                self.plan_empty(ui, which);
             }
         });
-        if let Some(k) = toggle {
-            self.lineage.look_for = if self.lineage.look_for.as_ref() == Some(&k) { None } else { Some(k) };
-        }
     }
 
     /// The Next career card: who and why with Start this career; How (Independent
     /// Training with its setup panel, or a manual career); then parents, scenario, deck and
     /// skills beside stats, races and keep-if; the odds strip last.
     pub(crate) fn next_card(&mut self, ui: &mut egui::Ui, b: &Brief) {
+        self.career_card(ui, b, None);
+    }
+
+    /// A career's card. As a plan's step it has a header tying it to the list ("Step 4 of 12 ·
+    /// Special Week's own career · Medium"), and reads without "Next:" unless it's the next one.
+    pub(crate) fn career_card(&mut self, ui: &mut egui::Ui, b: &Brief, head: Option<&crate::lineage_steps::StepHead>) {
         let p = pal(ui);
         let it = b.mode != "Manual career";
         let wide = ui.available_width() >= 1100.0;
@@ -582,12 +326,26 @@ impl App {
             ui.set_width(ui.available_width());
             let narrow_card = ui.available_width() < 700.0;
             let mut start = false;
+            if let Some(h) = head {
+                ui.label(semibold(&h.line, 13.0).color(p.accent));
+                ui.horizontal_wrapped(|ui| {
+                    crate::lineage_steps::kind_chip(ui, h.own);
+                    ui.label(RichText::new(&h.context).size(12.0).color(p.weak));
+                });
+                ui.add_space(8.0);
+            }
+            let next = head.is_none_or(|h| h.next);
             // Who and why.
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 self.avatar(ui, b.trainee, 64.0);
-                ui.vertical(|ui| {
+                // Leave the button its room: the text wraps before it.
+                let text_w = if narrow_card { ui.available_width() } else { (ui.available_width() - 190.0).max(200.0) };
+                ui.allocate_ui_with_layout(vec2(text_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_max_width(text_w);
+                    // A plan's step already says what kind of career it is and who it's for.
+                    if head.is_none() {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("NEXT CAREER").size(11.5).strong().color(p.accent));
+                        ui.label(RichText::new(if next { "NEXT CAREER" } else { "CAREER" }).size(11.5).strong().color(p.accent));
                         match b.step {
                             Some(n) => pill(ui, &format!("Parent · step {n}"), p.accent),
                             None => pill(ui, "Runner", p.accent),
@@ -598,12 +356,15 @@ impl App {
                             ui.label(RichText::new(crate::parentage::uma_name(&self.kb, r)).size(12.5));
                         }
                     });
+                    }
                     let full = crate::parentage::uma_name(&self.kb, b.trainee);
                     let (name, outfit) = full.split_once(" [").map_or((full.clone(), String::new()), |(n, o)| (n.to_string(), format!("[{o}")));
                     // One left-aligned text that wraps as a whole, never mid-word.
                     let mut job = egui::text::LayoutJob::default();
                     let bold = |sz: f32| FontId::new(sz, egui::FontFamily::Name(crate::theme::SEMIBOLD.into()));
-                    job.append("Next: ", 0.0, egui::TextFormat { font_id: bold(19.0), color: p.weak, ..Default::default() });
+                    if next {
+                        job.append("Next: ", 0.0, egui::TextFormat { font_id: bold(19.0), color: p.weak, ..Default::default() });
+                    }
                     job.append(&name, 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
                     job.append(&format!(" {outfit} "), 0.0, egui::TextFormat { font_id: FontId::proportional(17.0), color: p.weak, ..Default::default() });
                     job.append(&format!("as {}", style_article(b.style)), 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
@@ -661,6 +422,9 @@ impl App {
                     } else {
                         let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak, hover: None }).collect();
                         this.who_flow(ui, &items);
+                    }
+                    if let Some(n) = &b.inherit {
+                        ui.add(egui::Label::new(RichText::new(format!("⚠ {n}")).size(12.5).color(p.warn)).wrap());
                     }
                 });
                 label_row(ui, "SCENARIO", |ui| {
@@ -1049,12 +813,6 @@ pub(crate) fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, defa
     st.show_body_unindented(ui, body);
 }
 
-/// The compact borrow: "Borrow · MLB · <uma> ▸", a link that opens what to look for.
-fn borrow_chip(ui: &mut egui::Ui, kb: &crate::knowledge::Knowledge, card: u32, open: bool) -> bool {
-    let name = kb.cards.get(&card).map_or(card.to_string(), |c| c.uma.clone());
-    ui.link(RichText::new(format!("Borrow · MLB · {name} {}", if open { "▾" } else { "▸" })).size(12.5)).on_hover_text("What to look for: the card, why, search text and fallbacks").clicked()
-}
-
 /// A paragraph, ragged right and no wider than about 80 characters.
 pub(crate) fn prose(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
     let w = ui.available_width().min(PROSE_W);
@@ -1116,10 +874,6 @@ pub(crate) fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
     crate::ui_util::pill(ui, RichText::new(text).size(12.0).color(ink), fill, Stroke::new(1.0, color.gamma_multiply(0.55)));
 }
 
-fn note_is_replace(uma: &u32, next: &Option<Brief>) -> bool {
-    next.as_ref().is_some_and(|b| b.replaces == Some(*uma))
-}
-
 /// An uma's name without the outfit ("Curren Chan"); the outfit shows on hover of her avatar.
 fn short_name(kb: &crate::knowledge::Knowledge, outfit: u32) -> String {
     kb.umas.get(&outfit).map_or_else(|| crate::parentage::uma_name(kb, outfit), |u| u.name.clone())
@@ -1134,5 +888,3 @@ pub(crate) fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
 }
-
-use crate::lineage_kit::thousands;

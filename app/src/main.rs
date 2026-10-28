@@ -23,6 +23,7 @@ mod lineage;
 mod lineage_kit;
 mod lineage_page;
 mod lineage_plans;
+mod lineage_steps;
 mod lineage_runner;
 mod live;
 mod meta;

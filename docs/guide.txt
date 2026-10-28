@@ -143,6 +143,10 @@ the steps to plan a career, and the game words the app uses.
   Mark done (pick the finished uma that ran the career), Edit (keep or leave out runners;
   the changes wait until you re-plan), Re-plan, and Reset in the "..." menu. When you
   import finished umas or the meta sheet is read again, the plan says so and you choose.
+  A plan shows what it's for, then every career in order (who, why, how many tries it
+  usually takes); "Show how" opens a step's details. "Your team, before and after" shows
+  each race's best finished umas now beside the team after the plan. Point at an
+  underlined word to see what it means.
   Three views:
   - Champions Meeting: three runners for the next CM, each against what you can field
     today (your finished umas as they are, raced in the simulator), and the parent careers

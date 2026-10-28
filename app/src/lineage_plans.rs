@@ -54,6 +54,10 @@ pub(crate) struct PlansUi {
     /// (then each pads to the tallest, so the cards and their footers line up).
     card_h: [f32; 3],
     level: bool,
+    /// The step whose card is open (else the next one), and a plan whose open card was hidden
+    /// (one column).
+    pub open_step: Option<(Which, String)>,
+    pub steps_folded: Option<Which>,
 }
 
 /// How long worked-out notices stand (an import elsewhere shows within this).

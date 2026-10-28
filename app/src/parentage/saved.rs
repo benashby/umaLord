@@ -63,7 +63,7 @@ pub struct Basis {
 }
 
 /// One career the plan asks for, and whether it's done.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Career {
     /// Stable within the plan: "q2" (the CM queue's third parent step), "r<outfit>" (a CM
     /// runner's own career), "tt:<race>:<outfit>" or "tt:<race>:<outfit>:p<step>".
@@ -72,6 +72,45 @@ pub struct Career {
     pub label: String,
     pub brief: Brief,
     pub done: Option<Done>,
+    /// Her own career (she races for the team), else a parent career.
+    #[serde(default)]
+    pub own: bool,
+    /// The Team Trials race it helps.
+    #[serde(default)]
+    pub race: Option<String>,
+    /// What it's for, in one plain sentence.
+    #[serde(default)]
+    pub what_for: String,
+    /// How many careers it usually takes: "usually 3 careers; 1 in 10 need 8 or more".
+    #[serde(default)]
+    pub usually: String,
+}
+
+/// How many careers a step usually takes, from one career's chance of its must-haves (none for
+/// a runner's own career, which is kept or run again by its keep-if).
+pub fn usually(p: Option<f64>) -> String {
+    let Some(p) = p else { return "1 career".into() };
+    let (typical, nine) = super::verify::step_spread(p);
+    let n = |k: u32| format!("{k} career{}", if k == 1 { "" } else { "s" });
+    if typical == u32::MAX {
+        "it may never come: plan another route".into()
+    } else if nine <= typical {
+        format!("usually {}", n(typical))
+    } else {
+        format!("usually {}; 1 in 10 need {nine} or more", n(typical))
+    }
+}
+
+/// A parent career's reason: who it's for and what she passes on.
+fn parent_for(kb: &Knowledge, b: &Brief, runner: u32, race: Option<&str>) -> String {
+    let at = race.map_or(String::new(), |r| format!(" ({r})"));
+    let (me, who) = (super::short_name(kb, b.trainee), super::short_name(kb, runner));
+    if b.must.is_empty() {
+        format!("Make {me} a parent for {who}{at}: her career only has to finish.")
+    } else {
+        let what: Vec<String> = b.must.iter().map(|w| w.chip(kb).1).collect();
+        format!("Raise {me}'s chance to pass {} on to {who}{at}.", what.join(" and "))
+    }
 }
 
 /// A career marked done: the finished uma that ran it (if the player picked one) and when.
@@ -449,7 +488,9 @@ impl App {
             let b = self.parent_brief(&team.runners[*i].goal, run, &inv, step);
             (q.deck, q.friend, q.friend_why, q.friend_alts) = (b.deck.clone(), b.friend, b.friend_why.clone(), b.friend_alts.clone());
             queue.push(q);
-            careers.push(Career { key: format!("q{k}"), label: format!("{}'s parent career for {}", uma_name(&self.kb, run.trainee), uma_name(&self.kb, runner)), brief: b, done: None });
+            let what_for = parent_for(&self.kb, &b, runner, None);
+            let usual = usually(b.p);
+            careers.push(Career { key: format!("q{k}"), label: format!("{}'s parent career for {}", uma_name(&self.kb, run.trainee), uma_name(&self.kb, runner)), brief: b, what_for, usually: usual, ..Default::default() });
             self.check_cancel()?;
         }
         // Each runner's own career, the ace (most wins head to head) first.
@@ -466,7 +507,9 @@ impl App {
             let mut b = self.runner_brief(why, &r.plan, Some((r.plan.target[1], team.event.course_name.clone())), parents);
             b.legacies = super::brief::legacies_of(r.parents.now.as_ref(), &inv);
             (b.friend_why, b.friend_alts) = self.friend_picks(&r.plan);
-            careers.push(Career { key: format!("r{}", r.trainee), label: format!("{}'s own career", uma_name(&self.kb, r.trainee)), brief: b, done: None });
+            let again = team.today.iter().any(|t| crate::affinity::chara(t.outfit) == crate::affinity::chara(r.trainee));
+            let what_for = format!("Race as the team's {}{}{}.", r.style.label(), if n == 0 { " and its ace" } else { "" }, if again { ": a new career, built for this course, beats the one you have" } else { "" });
+            careers.push(Career { key: format!("r{}", r.trainee), label: format!("{}'s own career", uma_name(&self.kb, r.trainee)), brief: b, own: true, what_for, usually: usually(None), ..Default::default() });
             self.check_cancel()?;
         }
         self.note(format!("{} careers in order: the parent careers first, hardest first, then each runner's own.", careers.len()));
@@ -489,6 +532,7 @@ impl App {
             if basis.tt_meta.is_empty() { "never".into() } else { basis.tt_meta.clone() }
         ));
         let team = self.tt_team(200, &TtPins { pin: choices.tt_pin.clone(), exclude: choices.exclude.clone() })?;
+        let vets = self.veterans();
         self.stage("Writing each career's brief")?;
         let mut careers: Vec<Career> = Vec::new();
         let first = self.tt_next(&team, &inv);
@@ -510,7 +554,20 @@ impl App {
                 Some(_) => format!("tt:{race}:{runner}:p0"),
                 None => format!("tt:{race}:{}", b.trainee),
             };
-            careers.push(Career { key, label: tt_label(&self.kb, b, &race), brief: b.clone(), done: None });
+            let own = b.step.is_none();
+            let mut b = b.clone();
+            // A replacement's parents are her best pair, which doesn't carry the inherited unique.
+            let meta = self.tt_meta();
+            if own && b.replaces.is_some() && meta.inherit.uma > 0 && crate::affinity::chara(meta.inherit.uma) != crate::affinity::chara(b.trainee) {
+                b.inherit = Some(format!("For {}: borrow a friend's Summer Gold Ship as one parent in place of one of these; her targets should still start at A.", meta.inherit.skill));
+            }
+            let b = &b;
+            let what_for = match (b.replaces, own) {
+                (Some(old), _) => format!("Replace {old_name} in {race}: {old_name}'s unique skill fires unreliably.", old_name = super::short_name(&self.kb, old)),
+                (None, false) => parent_for(&self.kb, b, runner, Some(&race)),
+                (None, true) => format!("Run her again for {race}: she scores lowest on the team, so a better run raises it most."),
+            };
+            careers.push(Career { key, label: tt_label(&self.kb, b, &race), brief: b.clone(), own, race: Some(race.clone()), what_for, usually: usually(if own { None } else { b.p }), ..Default::default() });
         }
         // The rest: runners who aren't on today's team as they are, weakest first.
         let mut slots: Vec<(&str, &super::tt::Slot)> = team
@@ -532,7 +589,9 @@ impl App {
                         continue;
                     }
                     let b = self.parent_brief(&goal, run, &inv, k);
-                    careers.push(Career { key: format!("tt:{race}:{}:p{k}", s.trainee), label: tt_label(&self.kb, &b, race), brief: b, done: None });
+                    let what_for = parent_for(&self.kb, &b, s.trainee, Some(race));
+                    let usual = usually(b.p);
+                    careers.push(Career { key: format!("tt:{race}:{}:p{k}", s.trainee), label: tt_label(&self.kb, &b, race), brief: b, race: Some(race.to_string()), what_for, usually: usual, ..Default::default() });
                 }
             }
             if have(&careers, &format!("tt:{race}:{}", s.trainee)) {
@@ -542,7 +601,22 @@ impl App {
             let mut b = self.runner_brief(format!("Her own career for Team Trials ({race})."), &s.plan, Some((s.plan.target[1], race.to_string())), parents);
             b.legacies = super::brief::legacies_of(s.parents.now.as_ref(), &inv);
             (b.friend_why, b.friend_alts) = self.friend_picks(&s.plan);
-            careers.push(Career { key: format!("tt:{race}:{}", s.trainee), label: tt_label(&self.kb, &b, race), brief: b, done: None });
+            b.inherit = s.notes.iter().find(|n| n.contains("Summer Gold Ship")).cloned();
+            // Where her character races today, if anywhere: here, or another race.
+            let chara = crate::affinity::chara(s.trainee);
+            let now_in = team.rows.iter().find(|r| r.today.iter().any(|t| crate::affinity::chara(t.0.outfit) == chara)).map(|r| r.name);
+            let lead = if s.ace { format!("Lead {race} as its Ace") } else { format!("Join {race}") };
+            let what_for = match now_in {
+                Some(r) if r == race => format!("{lead}: a new career built for it scores more than the one racing now."),
+                Some(r) => {
+                    format!("{lead}: she moves over from {r}, with a new career built for {race}.")
+                }
+                None if vets.iter().any(|v| crate::affinity::chara(v.card_id) == chara) => {
+                    format!("{lead}: none of your finished {}s can race it as they are.", super::short_name(&self.kb, s.trainee))
+                }
+                None => format!("{lead}: you have no finished {} yet.", super::short_name(&self.kb, s.trainee)),
+            };
+            careers.push(Career { key: format!("tt:{race}:{}", s.trainee), label: tt_label(&self.kb, &b, race), brief: b, own: true, race: Some(race.to_string()), what_for, usually: usually(None), ..Default::default() });
             self.check_cancel()?;
         }
         self.note(format!("{} careers in order: the one that raises the team most first, then the weakest runners', parent careers before their own.", careers.len()));
@@ -596,7 +670,7 @@ mod tests {
     }
 
     fn career(key: &str, trainee: u32, must: Vec<Want>, legacies: Vec<(u64, u32)>) -> Career {
-        Career { key: key.into(), label: format!("career {key}"), brief: Brief { trainee, must, legacies, ..Default::default() }, done: None }
+        Career { key: key.into(), label: format!("career {key}"), brief: Brief { trainee, must, legacies, ..Default::default() }, ..Default::default() }
     }
 
     /// A Team Trials plan made with finished umas 1 and 2: Haru Urara's parent career (Dirt 1★,

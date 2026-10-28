@@ -62,6 +62,10 @@ pub struct Brief {
     /// Why the borrowed card, and the next best borrows if no friend has it MLB (card, why).
     pub friend_why: Option<String>,
     pub friend_alts: Vec<(u32, String)>,
+    /// Team Trials: how she gets the community's inherited unique (564 Escapades) when her
+    /// parents above don't carry it.
+    #[serde(default)]
+    pub inherit: Option<String>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -243,6 +247,7 @@ impl App {
             replaces: None,
             friend_why,
             friend_alts,
+            inherit: None,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -296,6 +301,7 @@ impl App {
             replaces: None,
             friend_why: None,
             friend_alts: Vec::new(),
+            inherit: None,
             mode: "Manual career".into(),
             setup,
             why,
