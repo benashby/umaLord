@@ -27,7 +27,7 @@ pub struct Progress {
 }
 
 /// The stages a Champions Meeting build reports, in order (the page lists the ones to come).
-pub const CM_STAGES: [&str; 7] = [
+pub const CM_STAGES: [&str; 8] = [
     "Reading your account",
     "Choosing runners and planning their parents",
     "Decks and skills",
@@ -35,10 +35,11 @@ pub const CM_STAGES: [&str; 7] = [
     "Comparing with today's team",
     "Ordering the parent careers",
     "Writing each career's brief",
+    "Looking for ways to raise the ceiling",
 ];
 
 /// The stages a Team Trials build reports, in order.
-pub const TT_STAGES: [&str; 7] = [
+pub const TT_STAGES: [&str; 8] = [
     "Reading your account",
     "Choosing candidates for each race",
     "Racing each race's candidates",
@@ -46,6 +47,7 @@ pub const TT_STAGES: [&str; 7] = [
     "Planning parents",
     "Comparing with today's team",
     "Writing each career's brief",
+    "Looking for ways to raise the ceiling",
 ];
 
 /// What a cancelled build returns.

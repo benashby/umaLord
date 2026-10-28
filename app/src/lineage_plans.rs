@@ -60,6 +60,8 @@ pub(crate) struct PlansUi {
     pub steps_folded: Option<Which>,
     /// The account's umas, support cards and finished umas, and when they were counted.
     ready: Option<(std::time::Instant, [usize; 3])>,
+    /// The plan whose "How to raise the ceiling" shows every row.
+    pub ceiling_all: Option<String>,
 }
 
 /// How long worked-out notices stand (an import elsewhere shows within this).
@@ -458,6 +460,9 @@ impl App {
                     prose(ui, &format!("{course}. Three runners for it, the parent careers they need, decks and skills."), 13.5, p.text);
                 }
             }
+            if let Some(plan) = &plan {
+                ceiling_hint(ui, plan);
+            }
             for n in notices.iter().take(1) {
                 ui.add_space(6.0);
                 this.notice_box(ui, which, n);
@@ -515,6 +520,9 @@ impl App {
                     }
                 }
                 None => prose(ui, "Fifteen runners over five races, an Ace for each, today's team to beat, and the career that raises it most.", 13.5, p.text),
+            }
+            if let Some(plan) = &plan {
+                ceiling_hint(ui, plan);
             }
         }, |this, ui| this.overview_footer(ui, which, has, LineageView::Tt));
     }
@@ -1035,6 +1043,18 @@ impl App {
             stage_list(ui, &plan.log, false, &[]);
         });
     }
+}
+
+/// An Overview card's one line on the plan's best way to raise it.
+fn ceiling_hint(ui: &mut egui::Ui, plan: &TeamPlan) {
+    let Some(l) = plan.ceiling.as_ref().and_then(|v| v.first()) else { return };
+    let p = pal(ui);
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Raise the ceiling:").size(12.5).color(p.weak));
+        ui.label(RichText::new(l.gain_text()).size(12.5).color(p.good));
+        ui.label(RichText::new(&l.title).size(12.5));
+    });
 }
 
 /// Stages with a tick (or a spinner for the running one), time and lines. Wide, each stage is a

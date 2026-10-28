@@ -233,7 +233,7 @@ fn skill_points(kb: &crate::knowledge::Knowledge, id: u32, own_unique: Option<u3
 
 /// Her skill points: each skill's points times the share of races it fired in. A unique the
 /// community finds unreliable fires far less in a full field than in head-to-head races: 40%.
-fn skills_score(kb: &crate::knowledge::Knowledge, meta: &TtMeta, outfit: u32, stars: u8, rates: &BTreeMap<u32, f64>) -> f64 {
+pub(crate) fn skills_score(kb: &crate::knowledge::Knowledge, meta: &TtMeta, outfit: u32, stars: u8, rates: &BTreeMap<u32, f64>) -> f64 {
     let unique = kb.umas.get(&outfit).and_then(|i| i.unique_skill);
     let shaky = meta.role(outfit).is_some_and(|r| r.unique.as_deref() == Some("inconsistent"));
     rates.iter().map(|(id, rate)| skill_points(kb, *id, unique, stars) * rate * if shaky && Some(*id) == unique { 0.4 } else { 1.0 }).sum()
@@ -241,13 +241,13 @@ fn skills_score(kb: &crate::knowledge::Knowledge, meta: &TtMeta, outfit: u32, st
 
 /// Placement between about 6th (4,000) and 1st (10,000) in a twelve-runner field, from her win
 /// share in head-to-head races: an estimate.
-fn placement(share: Option<f64>) -> f64 {
+pub(crate) fn placement(share: Option<f64>) -> f64 {
     4000.0 + 6000.0 * share.unwrap_or(0.5)
 }
 
 /// A race's team points from each runner's placement plus skills and style: positioning for
 /// each style on the team, and the Ace (the top one) +10%.
-fn team_points(runners: &[(f64, Style)]) -> f64 {
+pub(crate) fn team_points(runners: &[(f64, Style)]) -> f64 {
     let mut styles: Vec<Style> = runners.iter().map(|r| r.1).collect();
     styles.sort_by_key(|s| *s as u8);
     styles.dedup();
@@ -313,7 +313,7 @@ impl App {
     }
 
     /// A representative course for each race: one an event uses, else the first that fits.
-    fn tt_course(&self, meta: &TtMeta, row: usize) -> Option<u32> {
+    pub(crate) fn tt_course(&self, meta: &TtMeta, row: usize) -> Option<u32> {
         let (name, surface, distance, _) = ROWS[row];
         let length = meta.length(name);
         let mut fits: Vec<&crate::knowledge::UmalatorCourse> = self.kb.umalator_courses.iter().filter(|c| c.surface == surface.label() && length.map_or(Distance::of_metres(c.distance) == distance, |l| c.distance == l)).collect();

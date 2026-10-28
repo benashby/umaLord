@@ -213,6 +213,10 @@ pub struct TeamPlan {
     /// Notices the player answered "Not now" to.
     #[serde(default)]
     pub dismissed: Vec<String>,
+    /// How to raise the plan, measured while it was made (`ceiling.rs`), strongest first.
+    /// None for a plan made before the ceiling was measured.
+    #[serde(default)]
+    pub ceiling: Option<Vec<super::ceiling::Lever>>,
 }
 
 /// Something that changed under a plan, and what the player can do about it.
@@ -532,9 +536,13 @@ impl App {
             self.check_cancel()?;
         }
         self.note(format!("{} careers in order: the parent careers first, hardest first, then each runner's own.", careers.len()));
+        self.stage("Looking for ways to raise the ceiling")?;
+        let ceiling = self.cm_ceiling(&team, preset, &inv);
+        self.check_cancel()?;
+        self.note(ceiling_line(&ceiling));
         let borrows = team.runners.iter().map(|r| self.friend_picks(&r.plan)).collect();
         let next = careers.first().map(|c| c.brief.clone());
-        Ok(TeamPlan { which: Which::Cm(preset.id), made: stamp(), basis, built: Built::Cm { team, next, queue, borrows }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new() })
+        Ok(TeamPlan { which: Which::Cm(preset.id), made: stamp(), basis, built: Built::Cm { team, next, queue, borrows }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling) })
     }
 
     /// Make a Team Trials plan: the team and every career it asks for, the one that raises the
@@ -647,6 +655,10 @@ impl App {
         }
         self.note(format!("{} careers in order: the one that raises the team most first, then the weakest runners', parent careers before their own.", careers.len()));
         let meta = self.tt_meta();
+        self.stage("Looking for ways to raise the ceiling")?;
+        let ceiling = self.tt_ceiling(&team, &meta);
+        self.check_cancel()?;
+        self.note(ceiling_line(&ceiling));
         let lengths = team
             .rows
             .iter()
@@ -659,7 +671,15 @@ impl App {
                 }
             })
             .collect();
-        Ok(TeamPlan { which: Which::Tt, made: stamp(), basis, built: Built::Tt { team, next: first, lengths }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new() })
+        Ok(TeamPlan { which: Which::Tt, made: stamp(), basis, built: Built::Tt { team, next: first, lengths }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling) })
+    }
+}
+
+/// The ceiling stage's last line: what it found.
+fn ceiling_line(v: &[super::ceiling::Lever]) -> String {
+    match v.first() {
+        Some(l) => format!("{} way{} to raise it; the most: {} ({}).", v.len(), if v.len() == 1 { "" } else { "s" }, l.title, l.gain_text()),
+        None => "Nothing tried raised the plan by enough to list.".into(),
     }
 }
 
@@ -712,6 +732,7 @@ mod tests {
             choices: Choices::default(),
             pending: Vec::new(),
             dismissed: Vec::new(),
+            ceiling: None,
         }
     }
 
@@ -822,6 +843,9 @@ mod tests {
             }
             for c in &plan.careers {
                 eprintln!("  [{}] {}", c.key, c.label);
+            }
+            for l in plan.ceiling.iter().flatten() {
+                eprintln!("  ceiling: {} · {} · {} [{}]", l.gain_text(), l.title, l.why, l.measured);
             }
             assert!(plan.log.len() >= 5 && plan.log.iter().all(|s| s.secs.is_some()), "every stage logged and closed");
             // The page lists the stages to come from these.

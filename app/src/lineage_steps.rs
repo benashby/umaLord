@@ -624,3 +624,83 @@ impl App {
         ui.add_space(6.0);
     }
 }
+
+impl App {
+    /// "How to raise the ceiling": the plan's measured changes, strongest first, five at a time.
+    /// `working`: the measurements are still running (One runner's worker); `None`: a plan made
+    /// before they existed, with a button to measure (returns whether it was pressed).
+    pub(crate) fn ceiling_card(&mut self, ui: &mut egui::Ui, key: &str, levers: Option<&[crate::parentage::ceiling::Lever]>, working: bool) -> bool {
+        use crate::parentage::ceiling::LeverKind;
+        let p = pal(ui);
+        let all = self.lineage.p.ceiling_all.as_deref() == Some(key);
+        let mut toggle = false;
+        let mut measure = false;
+        crate::ui_util::card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(semibold("How to raise the ceiling", 17.0));
+                ui.label(RichText::new("What would raise this plan most, measured while it was made. Each is a separate change; their gains don't simply add up.").size(12.5).color(p.weak));
+            });
+            ui.add_space(6.0);
+            if working {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("Trying cards and parents you don't have yet…").size(13.0).color(p.weak));
+                });
+                return;
+            }
+            let Some(levers) = levers else {
+                crate::lineage_page::prose(ui, "This plan was made before umaLord measured what would raise it.", 13.5, p.weak);
+                let label = if key == "runner" { "Measure it" } else { "Re-plan to measure it" };
+                measure = ui.add(crate::ui_util::primary_button(ui, label, 13.0)).on_hover_text("Runs the simulations that find the umas, cards and parents that would raise the plan most.").clicked();
+                return;
+            };
+            if levers.is_empty() {
+                crate::lineage_page::prose(ui, "Nothing we tried raised this plan by enough to list: the umas, cards and parents you have already cover it.", 13.5, p.weak);
+                return;
+            }
+            let shown = if all { levers.len() } else { levers.len().min(5) };
+            for (k, l) in levers.iter().take(shown).enumerate() {
+                if k > 0 {
+                    ui.separator();
+                }
+                ui.horizontal_top(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(150.0, 26.0), Sense::hover());
+                    ui.painter().text(r.left_center(), Align2::LEFT_CENTER, l.gain_text(), FontId::new(15.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), p.good);
+                    // The art: the card, else the uma.
+                    match (l.kind, l.card, l.uma) {
+                        (LeverKind::GetCard | LeverKind::LimitBreak, Some(c), _) => {
+                            self.card_art(ui, c, 34.0, false);
+                        }
+                        (_, _, Some(u)) => {
+                            self.avatar(ui, u, 34.0);
+                        }
+                        _ => {}
+                    }
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(semibold(&l.title, 14.0));
+                            crate::ui_util::pill_padded(ui, RichText::new(&l.measured).size(11.0).color(p.weak), p.raised, Stroke::NONE, vec2(7.0, 2.0)).on_hover_text(match l.kind {
+                                LeverKind::GetUma => "The uma was built as the planner builds your runners (deck, skills, stats) and raced against the plan's runners on the same course.",
+                                LeverKind::GetCard | LeverKind::LimitBreak => "Her career was simulated with the card in her deck, then raced against her career as planned on the same course.",
+                                LeverKind::Parent => "The parent plan was made again with a friend's legacy carrying these sparks, and the careers it needs compared.",
+                            });
+                        });
+                        let mut why = l.why.clone();
+                        if !l.helps.is_empty() {
+                            why.push_str(&format!(" It also helps {}.", l.helps.iter().map(|u| crate::parentage::short_name(&self.kb, *u)).collect::<Vec<_>>().join(", ")));
+                        }
+                        ui.add(egui::Label::new(RichText::new(why).size(12.5).color(p.weak)).wrap());
+                    });
+                });
+            }
+            if levers.len() > 5 && ui.link(if all { "Show fewer".to_string() } else { format!("Show all ({})", levers.len()) }).clicked() {
+                toggle = true;
+            }
+        });
+        if toggle {
+            self.lineage.p.ceiling_all = if all { None } else { Some(key.to_string()) };
+        }
+        measure
+    }
+}

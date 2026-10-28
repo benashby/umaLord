@@ -13,6 +13,7 @@
 
 pub mod baseline;
 pub mod brief;
+pub mod ceiling;
 pub mod jobs;
 pub mod modes;
 pub mod outcome;

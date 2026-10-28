@@ -41,10 +41,14 @@ pub(crate) struct RunnerState {
     pub add_green: bool,
     /// Each settle candidate's cost: careers left if kept, by (step, finished uma id).
     pub settle_costs: std::collections::HashMap<(usize, u64), f64>,
+    /// How to raise the plan: measured on a worker after the plan is made or changed.
+    pub ceiling_due: bool,
+    pub ceiling_job: Option<std::sync::mpsc::Receiver<Vec<crate::parentage::ceiling::Lever>>>,
 }
 
 impl App {
     pub(crate) fn lineage_runner(&mut self, ui: &mut egui::Ui) {
+        self.runner_ceiling_poll(ui.ctx());
         // A runner's plan is built from the account too: set it up first.
         if self.lineage.runner.plan.is_none() && self.setup_gate(ui) {
             return;
@@ -155,6 +159,11 @@ impl App {
                 }
             },
             |this, ui| {
+                let working = this.lineage.runner.ceiling_job.is_some() || this.lineage.runner.ceiling_due;
+                if this.ceiling_card(ui, "runner", plan.ceiling.as_deref(), working) {
+                    this.lineage.runner.ceiling_due = true;
+                }
+                ui.add_space(12.0);
                 this.step_list(ui, &plan);
                 ui.add_space(12.0);
                 crate::ui_util::card(ui, |ui| {
@@ -234,6 +243,7 @@ impl App {
                             let _ = track::save(root, &plan);
                         }
                         self.lineage.runner.plan = Some(plan);
+                        self.lineage.runner.ceiling_due = true;
                     }
                     Err(e) => self.lineage.runner.message = Some(e),
                 }
@@ -245,6 +255,39 @@ impl App {
     }
 
     /// Run an action on the plan, save it, and show what it said.
+    /// Measure how to raise the runner's plan on a worker, after it was made or changed (the
+    /// only time this simulates), and keep the result with the plan.
+    fn runner_ceiling_poll(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.lineage.runner.ceiling_job {
+            match rx.try_recv() {
+                Ok(v) => {
+                    self.lineage.runner.ceiling_job = None;
+                    if let Some(plan) = &mut self.lineage.runner.plan {
+                        plan.ceiling = Some(v);
+                        if let Some(root) = &self.root {
+                            let _ = track::save(root, plan);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+                Err(_) => self.lineage.runner.ceiling_job = None,
+            }
+        }
+        if self.lineage.runner.ceiling_due && self.lineage.runner.ceiling_job.is_none() {
+            self.lineage.runner.ceiling_due = false;
+            let Some(plan) = self.lineage.runner.plan.clone() else { return };
+            let root = self.root.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx2 = ctx.clone();
+            std::thread::spawn(move || {
+                let mut app = crate::agent::mcp::headless_app(root);
+                let _ = tx.send(app.runner_plan_ceiling(&plan));
+                ctx2.request_repaint();
+            });
+            self.lineage.runner.ceiling_job = Some(rx);
+        }
+    }
+
     fn runner_do(&mut self, f: impl FnOnce(&mut ParentPlan, &crate::knowledge::Knowledge, &crate::parentage::Inventory, &[crate::veterans::Veteran], &str) -> Result<String, String>) {
         let Some(mut plan) = self.lineage.runner.plan.take() else { return };
         let inv = self.parent_inventory();
@@ -255,6 +298,7 @@ impl App {
         }
         self.lineage.runner.plan = Some(plan);
         self.lineage.runner.preview = None;
+        self.lineage.runner.ceiling_due = true;
         self.lineage.runner.message = Some(match msg {
             Ok(m) | Err(m) => m,
         });

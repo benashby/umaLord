@@ -44,6 +44,8 @@ pub struct ParentPlan {
     pub pin: Pin,
     /// Friends' legacies the player can borrow, which the plan may use.
     pub borrows: Vec<super::Borrow>,
+    /// How to raise it (`ceiling.rs`), measured on a worker after the plan is made or changed.
+    pub ceiling: Option<Vec<super::ceiling::Lever>>,
     /// The plan before its last change, for Undo (each holds its own, up to `UNDO` deep).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before: Option<Box<ParentPlan>>,

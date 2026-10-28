@@ -208,6 +208,11 @@ impl App {
                 }
                 this.plan_summary(ui, &plan);
                 ui.add_space(12.0);
+                if this.ceiling_card(ui, &crate::parentage::saved::label(which), plan.ceiling.as_deref(), false) {
+                    let ctx = ui.ctx().clone();
+                    this.plan_start(&ctx, which, plan.choices_after());
+                }
+                ui.add_space(12.0);
                 this.plan_steps(ui, which, &plan, wide);
                 ui.add_space(12.0);
                 if let Built::Tt { team, .. } = &plan.built {
