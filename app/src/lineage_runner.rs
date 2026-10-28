@@ -550,7 +550,26 @@ impl App {
             });
             ui.add_space(6.0);
             if !w.possible {
-                ui.add(egui::Label::new(RichText::new("No single friend's legacy can bring it: it needs more than three pinks, and a legacy line has three at most (hers and her two parents', 3★ each). Pick a runner with better grades here, or a lower goal.").size(13.0).color(crate::lineage_kit::ink(p.warn, p.surface))).wrap());
+                ui.add(egui::Label::new(RichText::new("No single friend's legacy can bring it: it needs more than three pinks, and a legacy line has three at most (hers and her two parents', 3★ each).").size(13.0).color(crate::lineage_kit::ink(p.warn, p.surface))).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("The step needs").size(12.5).color(p.weak));
+                    for (i, n) in &w.stars {
+                        crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Pink, crate::parentage::APTITUDES[*i], 0, Some((*n).min(3) as u8), false, true);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("INSTEAD").size(11.5).strong().color(p.weak));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(crate::ui_util::primary_button(ui, "Keep going with the plan", 13.0)).clicked() {
+                        self.lineage.runner.show_borrow = false;
+                    }
+                    if ui.button("Change the goal").on_hover_text("Start a new plan: another runner, or fewer aptitudes at A").clicked() {
+                        if let Some(root) = self.root.clone() {
+                            let _ = track::cancel(&root, &crate::ui_util::today());
+                        }
+                        self.lineage.runner = RunnerState { loaded: true, ..Default::default() };
+                    }
+                });
                 return;
             }
             let row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -582,17 +601,34 @@ impl App {
                     ui.label(RichText::new("nothing more: any legacy works").size(12.5));
                 }
             });
-            ui.label(RichText::new("Counting her own pink sparks and her two parents'.").size(12.0).color(p.weak));
+            let words: Vec<String> = w.stars.iter().map(|(i, n)| format!("{} {n}★ or more", crate::parentage::APTITUDES[*i])).chain(w.green.map(|_| "her line's unique".to_string())).collect();
+            if !words.is_empty() {
+                ui.label(RichText::new(format!("{}, counting her and her two parents.", words.join(" and "))).size(12.5));
+            }
             ui.add_space(4.0);
+            let mut pick: Option<u32> = None;
             row(ui, "Best characters", &mut |ui| {
-                for (c, aff) in w.charas.iter().take(6) {
+                for (rank, (c, aff)) in w.charas.iter().take(6).enumerate() {
                     if let Some(u) = self.kb.umas.values().filter(|u| crate::affinity::chara(u.id) == *c).map(|u| u.id).min() {
-                        self.avatar(ui, u, 24.0);
-                        ui.label(RichText::new(self.kb.umas[&u].name.clone()).size(12.5)).on_hover_text(format!("affinity {aff} with your runner and partner"));
+                        let chosen = self.lineage.runner.add_uma.is_some_and(|a| crate::affinity::chara(a) == *c);
+                        let r = egui::Frame::new().fill(if chosen { crate::lineage_kit::tint(p.accent, p.surface, 0.18) } else { p.raised }).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin { left: 4, right: 10, top: 2, bottom: 2 }).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{}", rank + 1)).size(11.5).color(p.weak));
+                                self.avatar(ui, u, 22.0);
+                                ui.label(RichText::new(self.kb.umas[&u].name.clone()).size(12.5));
+                            });
+                        });
+                        let r = r.response.interact(egui::Sense::click()).on_hover_text(format!("Affinity {aff} with your runner and her partner. Click to fill the form below."));
+                        if r.clicked() {
+                            pick = Some(u);
+                        }
                     }
                 }
             });
-            ui.label(RichText::new("Any outfit counts. More affinity makes every spark likelier to fire at the inspirations.").size(12.0).color(p.weak));
+            if pick.is_some() {
+                self.lineage.runner.add_uma = pick;
+            }
+            ui.label(RichText::new("Ranked by affinity; any outfit counts. Click one to fill the form below.").size(12.0).color(p.weak));
             ui.separator();
             // The Add form.
             ui.label(semibold("Found one? Add her", 13.5));
@@ -608,14 +644,23 @@ impl App {
                         ui.selectable_value(&mut uma, Some(id), name);
                     }
                 });
-                for (k, (i, _)) in w.stars.iter().enumerate() {
-                    ui.label(RichText::new(format!("{} pink", crate::parentage::APTITUDES[*i])).size(12.5));
-                    egui::ComboBox::from_id_salt(("borrow_star", k)).width(54.0).selected_text(format!("{}★", stars[k])).show_ui(ui, |ui| {
-                        for v in 0..=9u8 {
-                            ui.selectable_value(&mut stars[k], v, format!("{v}★"));
+            });
+            for (k, (i, need)) in w.stars.iter().enumerate() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("{} ★ in her line", crate::parentage::APTITUDES[*i])).size(12.5));
+                    for v in 0..=3u8 {
+                        if ui.add(egui::Button::selectable(stars[k] == v, RichText::new(format!("{v}★")).size(12.5))).clicked() {
+                            stars[k] = v;
                         }
-                    });
-                }
+                    }
+                    if u32::from(stars[k]) >= *need {
+                        ui.label(RichText::new("✔ enough").size(12.0).color(crate::lineage_kit::ink(p.good, p.surface)));
+                    } else {
+                        ui.label(RichText::new(format!("needs {need}★")).size(12.0).color(p.weak));
+                    }
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
                 if w.green.is_some() {
                     crate::ui_util::UiExt::tick(ui, &mut green, "carries the unique");
                 }

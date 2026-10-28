@@ -322,6 +322,45 @@ impl App {
             });
             ui.add_space(10.0);
         }
+        // 564 Escapades (the community's inherit for every runner): who needs a friend's Summer
+        // Gold Ship as a parent, and on request what to look for and who to pair her with.
+        let needs: Vec<(u32, String)> = team.rows.iter().flat_map(|r| r.slots.iter()).filter_map(|s| s.notes.iter().find(|n| n.contains("Summer Gold Ship")).map(|n| (s.trainee, n.split("pair her with ").nth(1).and_then(|x| x.split(" instead").next()).unwrap_or("").to_string()))).collect();
+        if !needs.is_empty() {
+            let key = "tt-564".to_string();
+            let open = self.lineage.look_for.as_ref() == Some(&key);
+            let mut toggle = false;
+            crate::ui_util::card(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Green, "564 Escapades", 0, Some(1), false, true);
+                    let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
+                    ui.label(RichText::new(format!("Every runner should inherit it (community). {} of {runners} need a friend's Summer Gold Ship as a parent.", needs.len())).size(13.0));
+                    if ui.link(if open { "Hide" } else { "What to look for" }).clicked() {
+                        toggle = true;
+                    }
+                });
+                if open {
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        self.avatar(ui, 100702, 32.0);
+                        ui.label(semibold(crate::parentage::uma_name(&self.kb, 100702), 13.5));
+                        ui.label(RichText::new("must carry her unique, 564 Escapades, as a green spark").size(12.5));
+                    });
+                    ui.label(RichText::new("PAIR HER WITH, FOR EACH RUNNER").size(11.5).strong().color(p.weak));
+                    for (t, partner) in &needs {
+                        ui.horizontal_wrapped(|ui| {
+                            self.avatar(ui, *t, 20.0);
+                            ui.label(RichText::new(short_name(&self.kb, *t)).size(12.5));
+                            ui.label(RichText::new(format!("→ {}", if partner.is_empty() { "a parent that keeps her targets at A" } else { partner.as_str() })).size(12.5).color(p.weak));
+                        });
+                    }
+                    ui.add(egui::Label::new(RichText::new("Need a new friend? Look for a trainer whose legacies include Summer Gold Ship with 564 Escapades as a green spark. Borrow her again for every career that uses her.").size(12.0).color(p.weak)).wrap());
+                }
+            });
+            if toggle {
+                self.lineage.look_for = if open { None } else { Some(key) };
+            }
+            ui.add_space(10.0);
+        }
         crate::ui_util::card(ui, |ui| {
             let w = ui.available_width();
             let narrow = w < 1000.0;
@@ -355,7 +394,7 @@ impl App {
                         if row.today.is_empty() {
                             ui.label(RichText::new("none of your finished umas can run it").size(12.5).color(p.weak));
                         }
-                        let items: Vec<Who> = row.today.iter().map(|(t, pts)| Who { uma: t.outfit, name: format!("#{} {}", t.vet, short_name(&self.kb, t.outfit)), note: format!("~{}", thousands(*pts)), note_color: p.weak }).collect();
+                        let items: Vec<Who> = row.today.iter().map(|(t, pts)| Who { uma: t.outfit, name: format!("#{} {}", t.vet, short_name(&self.kb, t.outfit)), note: format!("~{}", thousands(*pts)), note_color: p.weak, hover: None }).collect();
                         self.who_flow(ui, &items);
                     };
                     let plan_ui = |ui: &mut egui::Ui| {
@@ -372,7 +411,8 @@ impl App {
                                     (true, _) => format!("★ Ace · {tag}"),
                                     _ => tag.to_string(),
                                 };
-                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky || note_is_replace(&s.trainee, &next) { p.warn } else if s.ace { p.gold } else { p.weak } }
+                                let hover = s.plan.friend.and_then(|f| self.kb.cards.get(&f)).map(|c| format!("Borrows {} [{}] (MLB) from a friend", c.uma, c.title));
+                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky || note_is_replace(&s.trainee, &next) { p.warn } else if s.ace { p.gold } else { p.weak }, hover }
                             })
                             .collect();
                         self.who_flow(ui, &items);
@@ -421,7 +461,7 @@ impl App {
                     ui.label(RichText::new("none of your finished umas can run this course yet").color(pal(ui).weak));
                 }
             });
-            let items: Vec<Who> = team.today.iter().map(|t| Who { uma: t.outfit, name: format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit)), note: t.share.map_or(String::new(), |s| format!("wins {:.0}%", s * 100.0)), note_color: pal(ui).weak }).collect();
+            let items: Vec<Who> = team.today.iter().map(|t| Who { uma: t.outfit, name: format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit)), note: t.share.map_or(String::new(), |s| format!("wins {:.0}%", s * 100.0)), note_color: pal(ui).weak, hover: None }).collect();
             self.who_flow(ui, &items);
             ui.label(RichText::new("The best team from your finished umas as they are: their own stats, skills and aptitudes, raced in the simulator. The plan's gains are measured against it.").size(12.0).color(pal(ui).weak));
         });
@@ -527,7 +567,7 @@ impl App {
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.add_space(4.0);
-                        let items: Vec<Who> = q.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: if *id == 0 { "any legacy".into() } else { format!("#{id} {}", short_name(&self.kb, *uma)) }, note: String::new(), note_color: pal(ui).weak }).collect();
+                        let items: Vec<Who> = q.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: if *id == 0 { "any legacy".into() } else { format!("#{id} {}", short_name(&self.kb, *uma)) }, note: String::new(), note_color: pal(ui).weak, hover: None }).collect();
                         self.who_flow(ui, &items);
                         ui.label(RichText::new("· Trackblazer ·").size(12.5).color(pal(ui).weak));
                         ui.label(semibold(&q.careers, 13.0));
@@ -644,7 +684,7 @@ impl App {
                     if b.legacies.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&b.parents).size(13.0)).wrap());
                     } else {
-                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak }).collect();
+                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak, hover: None }).collect();
                         this.who_flow(ui, &items);
                     }
                 });
@@ -969,6 +1009,8 @@ pub(crate) struct Who {
     pub name: String,
     pub note: String,
     pub note_color: Color32,
+    /// Shown when the pointer is over her name (e.g. the card she borrows).
+    pub hover: Option<String>,
 }
 
 impl App {
@@ -994,7 +1036,10 @@ impl App {
                 for it in &items[start..end] {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     self.avatar(ui, it.uma, 24.0);
-                    ui.add(egui::Label::new(RichText::new(&it.name).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
+                    let name = ui.add(egui::Label::new(RichText::new(&it.name).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
+                    if let Some(h) = &it.hover {
+                        name.on_hover_text(h);
+                    }
                     if !it.note.is_empty() {
                         let ink = crate::lineage_kit::ink(it.note_color, pal(ui).raised);
                         ui.add(egui::Label::new(RichText::new(&it.note).size(12.0).color(ink)).wrap_mode(egui::TextWrapMode::Extend));
