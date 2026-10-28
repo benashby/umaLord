@@ -566,7 +566,9 @@ impl App {
                 let owned = self.roster.umas.iter().any(|u| u.id == r.id);
                 format!("{}{}", super::uma_name(&self.kb, r.id), if owned { " (yours)" } else { "" })
             }).take(4).collect();
-            if shaky && !others.is_empty() {
+            // Never suggest replacing a runner the player pinned.
+            let pinned = pins.pin.iter().any(|(t, r)| *t == s.trainee && r == row.name);
+            if shaky && !pinned && !others.is_empty() {
                 format!("{name} ({}) scores lowest and her unique fires unreliably: a steadier {} runner would score more, such as {}.", row.name, row.name, others.join(", "))
             } else {
             match s.parents.steps.first() {
