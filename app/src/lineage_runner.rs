@@ -33,6 +33,8 @@ pub(crate) struct RunnerState {
     pub preview: Option<(Pending, Vec<Run>, String)>,
     pub stuck_open: Option<bool>,
     pub message: Option<String>,
+    /// Each settle candidate's cost: careers left if kept, by (step, finished uma id).
+    pub settle_costs: std::collections::HashMap<(usize, u64), f64>,
 }
 
 impl App {
@@ -48,6 +50,12 @@ impl App {
                 let (id, targets) = v.split_once(':').map_or((v.as_str(), None), |(a, b)| (a, Some(b.split(',').filter_map(|t| t.parse().ok()).collect())));
                 if let Ok(id) = id.parse::<u32>() {
                     self.lineage.runner.plan = self.plan_for(id, targets).ok();
+                    // UMALORD_AFTER=<date>: the steps began then, so older finished umas count.
+                    if let (Some(plan), Ok(after)) = (&mut self.lineage.runner.plan, std::env::var("UMALORD_AFTER")) {
+                        for s in &mut plan.steps {
+                            s.after = after.clone();
+                        }
+                    }
                 }
             }
         }
@@ -395,6 +403,15 @@ impl App {
                 if closest.is_empty() {
                     ui.label(RichText::new(format!("No {} finished since this step began.", uma_name(&this.kb, run.trainee))).size(12.5).color(crate::lineage_kit::ink(p.weak, crate::lineage_kit::tint(p.warn, p.surface, 0.08))));
                 }
+                // What keeping each would leave to do, worked out once per candidate.
+                for h in closest.iter().take(3) {
+                    if !this.lineage.runner.settle_costs.contains_key(&(i, h.id)) {
+                        let inv = this.parent_inventory();
+                        let left = plan.preview_settle(&this.kb, &inv, vets, h.id, &crate::ui_util::today()).map_or(f64::NAN, |(after, _)| after.iter().map(Run::careers).sum());
+                        this.lineage.runner.settle_costs.insert((i, h.id), left);
+                    }
+                }
+                let now_left: f64 = plan.remaining().iter().map(Run::careers).sum();
                 for h in closest.iter().take(3) {
                     ui.horizontal_wrapped(|ui| {
                         this.avatar(ui, run.trainee, 24.0);
@@ -403,6 +420,11 @@ impl App {
                         ui.label(RichText::new(note).size(12.5).color(if h.must { p.good } else { crate::lineage_kit::ink(p.warn, p.surface) }));
                         if !h.same_parents {
                             ui.label(RichText::new("other legacies").size(12.0).color(p.weak));
+                        }
+                        if let Some(left) = this.lineage.runner.settle_costs.get(&(i, h.id)).filter(|l| l.is_finite()) {
+                            let d = left - (now_left - run.careers());
+                            let txt = if left.abs() < 0.5 { "then her lineage is ready".to_string() } else if d.abs() < 0.5 { format!("about {left:.0} careers left after") } else { format!("about {left:.0} careers left after ({}{:.0} vs. finishing the step)", if d > 0.0 { "+" } else { "" }, d) };
+                            ui.label(RichText::new(txt).size(12.0).color(p.weak));
                         }
                         if ui.small_button("Preview").clicked() {
                             let inv = this.parent_inventory();
