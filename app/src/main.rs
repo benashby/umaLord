@@ -20,6 +20,7 @@ mod digest;
 mod home;
 mod knowledge;
 mod lineage;
+mod lineage_page;
 mod live;
 mod meta;
 mod notes;
@@ -546,6 +547,8 @@ pub(crate) enum Tab {
     Collection,
     /// Planner, race sim and results, as sub-tabs.
     Career,
+    /// The parent planner's page: CM and Team Trials teams, and one runner's plan.
+    Lineage,
     Ask,
     /// The notes and data files: not in the top bar, opened from Settings (`App::open_notes`).
     Notes,
@@ -580,6 +583,7 @@ impl Tab {
                 "Career",
                 "Plan a career, race the build against others in the simulator, and log what really happened.",
             ),
+            Tab::Lineage => ("🌱", "Lineage", "Your next career, and why: the parent careers a Champions Meeting or Team Trials team needs, and what to look for in each."),
             Tab::Ask => ("💬", "Ask", "Ask questions about your account in plain English and get answers from your own data."),
             Tab::Notes => ("📝", "Notes", "Read the notes, plans and insights saved in this folder."),
         }
@@ -634,7 +638,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
 ];
 
 /// The top bar's tabs, left to right. Notes isn't one: Settings → Data and updates opens it.
-const TABS: [Tab; 4] = [Tab::Home, Tab::Collection, Tab::Career, Tab::Ask];
+const TABS: [Tab; 5] = [Tab::Home, Tab::Collection, Tab::Career, Tab::Lineage, Tab::Ask];
 
 /// The Collection tab's sub-tabs.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -711,6 +715,8 @@ pub(crate) struct App {
     pub settings: settings_page::SettingsState,
     /// The live Champions Meeting schedule (official news and Umalator), refreshed in the background.
     pub live: live::LiveState,
+    /// The Lineage page: its view and the teams the planner built.
+    pub lineage: lineage_page::LineageState,
     /// The weekly game-data pack (`datapack.rs`): the check in flight, and what the last one said.
     pub pack: Option<std::sync::mpsc::Receiver<Result<datapack::Outcome, String>>>,
     pub pack_status: Option<String>,
@@ -831,6 +837,7 @@ impl App {
             onboarding: Default::default(),
             settings: Default::default(),
             live: Default::default(),
+            lineage: Default::default(),
             pack: None,
             pack_status: None,
             pack_tried: false,
@@ -855,6 +862,7 @@ impl App {
         app.tab = match env("UMALORD_TAB").as_deref() {
             Some("umas" | "cards" | "skills" | "collection") => Tab::Collection,
             Some("planner" | "sim" | "results" | "career") => Tab::Career,
+            Some("lineage" | "lineage-cm" | "lineage-tt" | "lineage-runner") => Tab::Lineage,
             Some("notes") => Tab::Notes,
             Some("ask") => Tab::Ask,
             _ => Tab::Home,
@@ -863,6 +871,11 @@ impl App {
             Some("cards") => CollectionTab::Cards,
             Some("skills") => CollectionTab::Skills,
             _ => CollectionTab::Umas,
+        };
+        app.lineage.view = match env("UMALORD_TAB").as_deref() {
+            Some("lineage-tt") => lineage_page::LineageView::Tt,
+            Some("lineage-runner") => lineage_page::LineageView::Runner,
+            _ => lineage_page::LineageView::Cm,
         };
         app.career_tab = match env("UMALORD_TAB").as_deref() {
             Some("sim") => CareerTab::Race,
@@ -1382,6 +1395,7 @@ impl App {
                 CareerTab::Race => 3,
                 CareerTab::Results => 4,
             },
+            Tab::Lineage => 2,
             Tab::Ask | Tab::Notes => 5,
         }
     }
@@ -1698,7 +1712,7 @@ impl App {
             }
         }
         let simulating = self.sim.job.is_some() || self.planner.skill_job.is_some() || self.planner.pick_job.is_some() || self.sim.extra.is_some() || self.debug_extra;
-        let installing = self.ask.oc.install_rx.is_some() || simulating;
+        let installing = self.ask.oc.install_rx.is_some() || simulating || self.lineage_busy() || (self.tab == Tab::Lineage && ctx.input(|i| i.time) < 4.0);
         // UMALORD_ASK=<question>: ask it on start, and hold the screenshot until it's answered.
         if !installing && let Some(q) = self.debug_question.take() {
             self.tab = Tab::Ask;
@@ -1781,6 +1795,7 @@ impl App {
                 }
                 Tab::Collection => self.collection_tab(ui),
                 Tab::Career => self.career_page(ui),
+                Tab::Lineage => self.lineage_page(ui),
                 Tab::Notes => self.notes_tab(ui),
                 Tab::Ask => self.ask_tab(ui),
             }
