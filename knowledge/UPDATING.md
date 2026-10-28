@@ -44,7 +44,7 @@ These files are written from community guides, each claim with its source and th
 
 ### What to look for each time
 
-- **New umas or outfits:** add them to `tt_meta.json`'s roles once the guides place them; note new uniques that fire unreliably. New Summer/alternate outfits sometimes change the inherit (as Summer Gold Ship did in July 2026).
+- **New umas or outfits:** add them to `tt_meta.json`'s roles once the guides place them; note new uniques that fire unreliably. A new outfit can change the inherit (Summer Gold Ship's 564 Escapades is today's).
 - **New cards:** new borrows by race or style; whether Light Hello is still the first Grand Concert borrow.
 - **A new scenario or a balance patch:** the TT scenario pick, stat caps (`mechanics.md`), stamina targets, skill point values, affinity rules (the July 2026 patch removed G2/G3 and epithets from affinity).
 - **Team Trials rule changes:** points, slots, Ace, bonuses. Rules belong in `modes.md` and `mechanics.md`; the planner's point values are in `parentage/tt.rs` (`skill_points`, `POSITIONING`).

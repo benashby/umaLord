@@ -127,6 +127,15 @@ pub struct Slot {
     pub plan: Plan,
     /// Why she's here, and what to watch.
     pub notes: Vec<String>,
+    /// Her own finished umas already start her race's grades at A (the inherit aside): her
+    /// next career can be her own; otherwise a parent step comes first.
+    pub ready: bool,
+}
+
+/// A race's surface and distance.
+pub fn race_grades(race: &str) -> (Surface, Distance) {
+    let i = ROWS.iter().position(|r| r.0 == race).unwrap_or(0);
+    (ROWS[i].1, ROWS[i].2)
 }
 
 impl Slot {
@@ -159,7 +168,10 @@ pub struct TtTeam {
 /// Points for one skill she fires.
 fn skill_points(kb: &crate::knowledge::Knowledge, id: u32, own_unique: Option<u32>, stars: u8) -> f64 {
     if Some(id) == own_unique {
-        return if stars >= 3 { 2500.0 } else { 2000.0 };
+        // Game8: a 3★+ unique scores 2,000 (Lv1) to 2,600 (Lv6), 1★-2★ 1,500 to 2,000; her
+        // stars set the level she starts at (3★ Lv1, then +1 a star), and a career's fan
+        // counts add up to three more: assume one.
+        return if stars >= 3 { 2000.0 + 100.0 * f64::from((stars - 3 + 2).min(6)) } else { 1700.0 };
     }
     if id >= 900_000 && id < 1_000_000 {
         return 500.0;
@@ -186,7 +198,8 @@ impl App {
         plan.friend_lb = 4;
         plan.target = [1200, stamina, 1000, 600, 1000];
         plan.pick_objective = crate::skill_opt::PickObjective::Consistency;
-        if !meta.scenario.name.is_empty() {
+        // The meta's scenario only if Global has it.
+        if self.kb.scenarios.as_ref().is_some_and(|g| g.scenarios.iter().any(|x| x.global && x.matches(&meta.scenario.name))) {
             plan.scenario = meta.scenario.name.clone();
         }
         plan
@@ -303,7 +316,7 @@ impl App {
                         snotes.push(format!("Note: {n}."));
                     }
                 }
-                slots.push(Slot { trainee: t, style, ace: false, placement: 0.0, skills: 0.0, total: 0.0, natural, parents: Proposal::default(), plan: self.planner.plan.clone(), notes: snotes });
+                slots.push(Slot { trainee: t, style, ace: false, placement: 0.0, skills: 0.0, total: 0.0, natural, parents: Proposal::default(), plan: self.planner.plan.clone(), notes: snotes, ready: false });
             }
             let Some(course) = course_id.and_then(|c| data.courses.get(&c).cloned()) else {
                 notes.push(format!("No simulator course for {}: its runners weren't raced.", ROWS[row].0));
@@ -394,6 +407,8 @@ impl App {
             let (_, surface, distance, _) = ROWS[i];
             for s in &mut row.slots {
                 let mut goal = Goal { runner: s.trainee, targets: vec![usize::from(surface == Surface::Dirt), 2 + Distance::ALL.iter().position(|d| *d == distance).unwrap_or(1), 6 + s.style as usize], label: format!("Team Trials {}", row.name), ..Default::default() };
+                let base = super::jobs::propose(&self.kb, &goal, inv);
+                s.ready = base.now.as_ref().is_some_and(super::score::Lineage::meets);
                 let mut p = None;
                 if let Some(g) = inherit.filter(|g| crate::affinity::chara(*g) != crate::affinity::chara(s.trainee)) {
                     goal.green = Some(g);
@@ -412,12 +427,12 @@ impl App {
                         let partner = with_friend.now.as_ref().filter(|l| l.meets()).and_then(|l| l.legacies.iter().map(|i| &inv2.parents[*i]).find(|x| x.id != borrowed).map(|x| super::parent_name(&self.kb, x)));
                         goal.green = None;
                         match partner {
-                            Some(w) => s.notes.push(format!("Borrow a friend's Summer Gold Ship as one parent ({} comes with her) and pair her with {w}: every target still starts at A.", meta.inherit.skill)),
+                            Some(w) => s.notes.push(format!("For {}: borrow a friend's Summer Gold Ship as one parent and pair her with {w} instead of the parents below; every target still starts at A.", meta.inherit.skill)),
                             None => s.notes.push(format!("{} needs Summer Gold Ship as a parent: borrow a friend's, and plan the other parent so her targets still start at A.", meta.inherit.skill)),
                         }
                     }
                 }
-                s.parents = p.unwrap_or_else(|| super::jobs::propose(&self.kb, &goal, inv));
+                s.parents = p.unwrap_or(base);
             }
         }
         let total: f64 = rows.iter().flat_map(|r| r.slots.iter().map(|s| s.total)).sum();
@@ -436,7 +451,7 @@ impl App {
                 format!("{name} ({}) scores lowest and her unique fires unreliably: a steadier {} runner would score more, such as {}.", row.name, row.name, others.join(", "))
             } else {
             match s.parents.steps.first() {
-                Some(step) if !s.natural => format!("{name} ({}): her lineage needs {} parent step(s) first; start with a career of {}.", row.name, s.parents.steps.len(), super::uma_name(&self.kb, step.trainee)),
+                Some(step) if !s.ready => format!("{name} ({}): her lineage needs {} parent step(s) first; start with a career of {}.", row.name, s.parents.steps.len(), super::uma_name(&self.kb, step.trainee)),
                 _ => format!("{name} ({}) scores lowest: train her career with the deck and skills shown; it raises the team most.", row.name),
             }
             }

@@ -48,7 +48,7 @@ The app's deterministic planner (`app/src/parentage/`), which the Lineage page w
 - **Settling:** the user keeps a finished uma for the step (with its must-haves, or settling for one without them), and the plan is worked out again from everything the account has: if the goal still fits under the cap the next steps update; if not, the plan waits for the user to pick another route (a longer one, a friend's legacy, another runner, a lower grade).
 - **Checked on a real account (2026-10-27):** every runner × surface × distance × style goal, about 0.25 s each, every route ending in a lineage that meets its goal and a hand-worked dirt mile case matching; goals wanting another uma's unique, each making it when no finished uma had it; and goals played through with rolled sparks (keep the first uma with the must-haves, re-plan), within about 6% of the careers predicted overall, none stuck. The tests are `parentage_real_account`, `parentage_real_account_greens` and `parentage_play_through` (ignored; they read the account in `UMALORD_ROOT`).
 - **A step's career brief:** the scenario (Trackblazer for parents), a deck with a borrowed MLB friend card, skills bought for rating (rank sets green and white stars), the stats to aim for (a wanted blue's stat at 1100+), the **G1s to win** (her parents' and her future partner's G1s she can run at B or better: +3 affinity per link that won it), and what makes her a keeper.
-- **Not planned yet:** blue and white jobs as must-haves (a chosen 3★ blue is a 50-career lottery), routes of more than two steps or where one step's product is the next step's legacy, the parent's rank (green and white stars use the account's own share of SS finishes), deadlines, and Team Trials goals.
+- **Not planned yet:** blue and white jobs as must-haves (a chosen 3★ blue is a 50-career lottery), routes of more than two steps (two generations, step 1's product as one of step 2's parents, is planned when nothing else fits the cap), and the parent's rank (green and white stars use the account's own share of SS finishes). Team Trials teams plan each runner's lineage (`modes.md`).
 
 ## How to run a parent career
 
@@ -87,6 +87,6 @@ Opinion from uma.guide's Unique Skill guide, Game8 and translated JP CM guides; 
 | Superior Heal | Grass Wonder [Saintly Jade Cleric] | Long races (recovery) |
 | Pure Heart | Super Creek | Recovery near the front |
 | U=ma2 | Agnes Tachyon [tach-nology] | Recovery backup (Pisces Cup Oguri builds) |
-| 564 Escapades | Gold Ship [Run!Run!Classic] (summer) | Team Trials score, not CM racing (a green that fires a random gold) |
+| 564 Escapades | Gold Ship [RUN! RUIN! LAUNCHER!] (summer) | Team Trials score, not CM racing (a green that fires a random gold) |
 
 Guidance for CMs past the next one comes from JP's runs of the same cup (Uma Musume Hub, mihonostudios.com/champions-meeting/<n>): label it a projection. The scenario uma.guide lists for a future CM is JP's; Global's current scenario is Grand Concert until announced otherwise.

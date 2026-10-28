@@ -8,7 +8,7 @@
     {"name": "Game8, Team Trials guide (Global)", "url": "https://game8.co/games/Umamusume-Pretty-Derby/archives/536831", "updated": "2026-08-14"}
   ],
   "rules": {
-    "note": "Game rules as the guides state them: five races (Dirt always a mile-ish distance), one slot per race at first, a second at Class 2, a third at Class 3; every uma once in the team, alternate outfits of one uma included; the top slot of each race is its Ace (+10% of her score); placement 10,000 / 8,000 / 7,000 / 6,000 / 5,000 / 4,000 ×2 / 3,000 ×2 / 2,000 ×3; team bonus 5,000 (all three top 3) or 4,000 (all top 5); winning 3 of 5 races adds 10,000; skills gold 1,200, white or green 500, inherited unique 500, own unique 1,500 to 3,000 by rarity and level; Strong Start 1,000; good positioning 1,000 each in early, mid and late race per running style on the race's team.",
+    "note": "Game rules as the guides state them: five races (Dirt always a mile-ish distance), one slot per race at first, a second at Class 2, a third at Class 3; every uma once in the team, alternate outfits of one uma included; the top slot of each race is its Ace (+10% of her score); placement 10,000 / 8,000 / 7,000 / 6,000 / 5,000 / 4,000 ×2 / 3,000 ×2 / 2,000 ×3; team bonus 5,000 (all three top 3) or 4,000 (all top 5); winning 3 of 5 races adds 10,000; skills gold 1,200, white or green 500, inherited unique 500, own unique 2,000 to 2,600 at 3★ or more by its level (1,500 to 2,000 below 3★); Strong Start 1,000; good positioning 1,000 each in early, mid and late race per running style on the race's team.",
     "source": "uma.guide Team Trials (2026-10-05); Game8 (2026-08-14); umareference Format (2026-08-26)"
   },
   "tracks": {
@@ -26,8 +26,8 @@
   "scenario": {"name": "Grand Concert", "why": "the best scenario for Team Trials runners until most of the support grid is UF or above (uma.guide, 2026-10-05)"},
   "inherit": {"uma": 100702, "skill": "564 Escapades", "why": "Summer Gold Ship's unique: worth inheriting on every member; a white skill (500) that fires a random gold (1,200 more) in the second half (uma.guide, 2026-10-05)"},
   "borrows": {
-    "note": "Friend support cards to borrow, best first (uma.guide, 2026-10-05). Light Hello first in Grand Concert, even the R card uncapped; then by race and by style.",
-    "general": [30052, 10083],
+    "note": "Friend support cards to borrow, best first (uma.guide, 2026-10-05). Light Hello first in Grand Concert (her R card uncapped works too; the planner names the SSR); then by race and by style. Mihono Bourbon's free Halloween card (30066) gives Concentration in Grand Concert.",
+    "general": [30052],
     "Sprint": [30068, 30108],
     "Mile": [30053, 30108],
     "Medium": [30146, 30024],
@@ -35,8 +35,7 @@
     "Front": [30107],
     "Pace": [30101, 30010],
     "Late": [30122],
-    "End": [30097],
-    "concentration": [30066]
+    "End": [30097]
   },
   "skills": {
     "prefer": ["Professor of Curvature", "Lane Legerdemain", "Concentration"],

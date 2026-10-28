@@ -39,10 +39,14 @@ pub struct Brief {
 }
 
 /// The unique's fan counts for her, by whether she's a Dirt uma (higher Dirt grade than Turf).
-fn fan_line(kb: &Knowledge, trainee: u32) -> String {
+fn fan_line(kb: &Knowledge, trainee: u32, scenario: &str) -> String {
     let dirt = kb.umas.get(&trainee).is_some_and(|u| grade_rank(&u.aptitude.dirt) > grade_rank(&u.aptitude.turf));
+    if scenario == "Trackblazer" {
+        return "Trackblazer levels her unique at each year's end with the Director's bond at 15% / 30% / 50% and 5,000 / 60,000 / 120,000 fans: her scheduled and rival races get most of it.".into();
+    }
     let (a, b, c) = if dirt { ("40,000", "60,000", "80,000") } else { ("60,000", "70,000", "120,000") };
-    format!("Her unique levels up in the Senior year at {a} fans by Valentine's, {b} by Fan Appreciation (with the Director's bond green) and {c} by Christmas: run extra races only to reach those, on turns without a strong friendship training.")
+    let bond = if scenario == "Unity Cup" { "" } else { " (with the Director's bond green, 60%)" };
+    format!("Her unique levels up in the Senior year at {a} fans by Valentine's, {b} by Fan Appreciation{bond} and {c} by Christmas: run extra races only to reach those, on turns without a strong friendship training.")
 }
 
 const RACING: &str = "Don't run three races in a row if you can help it (a third risks her mood; a fourth costs stats).";
@@ -119,7 +123,7 @@ impl App {
             "Aim for {}; Speed first, then the stamina floor, then Power and Wit (Wit makes skills fire and keeps her calm).",
             plan.target.iter().enumerate().map(|(i, v)| format!("{} {v}", STATS[i])).collect::<Vec<_>>().join(", ")
         ));
-        let mut races = vec![fan_line(kb, trainee)];
+        let mut races = vec![fan_line(kb, trainee, &plan.scenario)];
         if plan.scenario == "Grand Concert" {
             races.push("Grand Concert's races give no Performance Points: run her objective races and the fan races above, and train the rest.".into());
         }
@@ -183,11 +187,25 @@ impl App {
         // that the player owns and the team doesn't use yet.
         let meta = self.tt_meta();
         if meta.role(s.trainee).is_some_and(|r| r.unique.as_deref() == Some("inconsistent")) {
-            let on_team: Vec<u32> = team.rows.iter().flat_map(|r| r.slots.iter().map(|x| crate::affinity::chara(x.trainee))).collect();
-            let alt = meta.roles.list.iter().find(|r| r.races.iter().any(|x| x == row.name) && r.unique.is_none() && !on_team.contains(&crate::affinity::chara(r.id)) && self.roster.umas.iter().any(|u| u.id == r.id));
-            if let Some(r) = alt {
+            // Everyone else on the team (another outfit of the replaced uma may take her place).
+            let on_team: Vec<u32> = team.rows.iter().flat_map(|r| r.slots.iter().filter(|x| x.trainee != s.trainee).map(|x| crate::affinity::chara(x.trainee))).collect();
+            let (surface, distance) = super::tt::race_grades(row.name);
+            let fit = |id: u32| self.kb.umas.get(&id).map(|u| (grade_rank(u.aptitude.surface(surface)), grade_rank(u.aptitude.distance(distance))));
+            // Owned, steady, B or better in the race; the meta's order, then natural A grades.
+            let mut alts: Vec<&super::tt::Role> = meta
+                .roles
+                .list
+                .iter()
+                .filter(|r| r.id != s.trainee && r.races.iter().any(|x| x == row.name) && r.unique.is_none() && !on_team.contains(&crate::affinity::chara(r.id)) && self.roster.umas.iter().any(|u| u.id == r.id))
+                .filter(|r| fit(r.id).is_some_and(|(gs, gd)| gs >= 6 && gd >= 6))
+                .collect();
+            alts.sort_by_key(|r| (r.races.iter().position(|x| x == row.name), fit(r.id).map(|(gs, gd)| std::cmp::Reverse(gs.min(7) + gd.min(7)))));
+            if let Some(r) = alts.first() {
                 let a = self.kb.umas.get(&r.id).map(|u| u.aptitude.clone()).unwrap_or_default();
-                let style = r.styles.iter().filter_map(|x| super::tt::parse_style(x)).find(|st| grade_rank(a.style(*st)) >= 6).unwrap_or_else(|| a.best_style());
+                // Her preferred style, one the race's other runners don't use if she can.
+                let used: Vec<Style> = row.slots.iter().filter(|x| x.trainee != s.trainee).map(|x| x.style).collect();
+                let styles: Vec<Style> = r.styles.iter().filter_map(|x| super::tt::parse_style(x)).filter(|st| grade_rank(a.style(*st)) >= 6).collect();
+                let style = styles.iter().find(|st| !used.contains(st)).or(styles.first()).copied().unwrap_or_else(|| a.best_style());
                 let plan = self.tt_runner_plan(&meta, row.name, r.id, style);
                 let replaced = uma_name(&self.kb, s.trainee);
                 let goal = super::tt::Slot { trainee: r.id, style, ..s.clone() }.parents_goal(row.name);
@@ -201,7 +219,8 @@ impl App {
                 return Some(self.runner_brief(format!("Her own career for Team Trials ({}), to replace {replaced}, whose unique fires unreliably.", row.name), &plan, Some((plan.target[1], row.name.to_string())), parents));
             }
         }
-        if let Some(run) = s.parents.steps.first() {
+        // Parents first only when her finished umas don't yet start her race's grades at A.
+        if let Some(run) = s.parents.steps.first().filter(|_| !s.ready) {
             return Some(self.parent_brief(&s.parents_goal(row.name), run, inv, 0));
         }
         let parents = s.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
