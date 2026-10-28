@@ -48,6 +48,7 @@ These files are written from community guides, each claim with its source and th
 - **New cards:** new borrows by race or style; whether Light Hello is still the first Grand Concert borrow.
 - **A new scenario or a balance patch:** the TT scenario pick, stat caps (`mechanics.md`), stamina targets, skill point values, affinity rules (the July 2026 patch removed G2/G3 and epithets from affinity).
 - **Team Trials rule changes:** points, slots, Ace, bonuses. Rules belong in `modes.md` and `mechanics.md`; the planner's point values are in `parentage/tt.rs` (`skill_points`, `POSITIONING`).
+- **Independent Training:** what it lets the player set (prioritized skills, focus, agenda), how it wins races, and how its results compare with manual careers; the career briefs (`parentage/brief.rs`) follow `mechanics.md`'s section on it.
 - **A new CM:** the meta sheet's tab (`--only meta`); nothing else to curate.
 
 ## Checking the planner after any refresh
