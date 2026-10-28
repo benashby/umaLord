@@ -33,6 +33,12 @@ pub(crate) struct RunnerState {
     pub preview: Option<(Pending, Vec<Run>, String)>,
     pub stuck_open: Option<bool>,
     pub message: Option<String>,
+    /// The "What to look for" panel: shown, and its Add form (uma, pink stars per wanted
+    /// aptitude, whether she carries the wanted unique).
+    pub show_borrow: bool,
+    pub add_uma: Option<u32>,
+    pub add_stars: Vec<u8>,
+    pub add_green: bool,
     /// Each settle candidate's cost: careers left if kept, by (step, finished uma id).
     pub settle_costs: std::collections::HashMap<(usize, u64), f64>,
 }
@@ -62,6 +68,10 @@ impl App {
         if self.lineage.runner.plan.is_none() {
             self.goal_picker(ui);
             return;
+        }
+        // UMALORD_BORROW=1: open the What to look for panel, for screenshots.
+        if std::env::var("UMALORD_BORROW").is_ok() && self.lineage.runner.message.is_none() {
+            self.lineage.runner.show_borrow = true;
         }
         // UMALORD_PREVIEW=route: open the another-route preview, for screenshots.
         if std::env::var("UMALORD_PREVIEW").is_ok_and(|v| v == "route") && self.lineage.runner.preview.is_none() && self.lineage.runner.message.is_none() {
@@ -119,8 +129,10 @@ impl App {
                 if let Some(why) = &plan.blocked {
                     crate::ui_util::card(ui, |ui| {
                         ui.label(semibold("The plan is waiting for your choice", 15.0));
-                        ui.label(RichText::new(why).size(13.0).color(p.warn));
+                        ui.label(RichText::new(why).size(13.0).color(crate::lineage_kit::ink(p.warn, p.surface)));
                     });
+                    ui.add_space(8.0);
+                    this.look_for_legacy(ui, &plan);
                     ui.add_space(8.0);
                 }
                 match (current, &brief) {
@@ -333,6 +345,10 @@ impl App {
                 ui.add_space(8.0);
                 self.stuck_panel(ui, plan, n, unlucky, vets);
             }
+            if self.lineage.runner.show_borrow && plan.blocked.is_none() {
+                ui.add_space(8.0);
+                self.look_for_legacy(ui, plan);
+            }
         });
     }
 
@@ -439,13 +455,22 @@ impl App {
             let route_ui = |this: &mut Self, ui: &mut egui::Ui| {
                 ui.label(semibold("2 · Try another route", 13.5));
                 prose(ui, &format!("Set this step aside: the same goal, without {} and these two legacies. The steps before stay done.", uma_name(&this.kb, run.trainee)));
-                if ui.button("Preview the route").clicked() {
-                    let inv = this.parent_inventory();
-                    match plan.preview_another_route(&this.kb, &inv, vets, &crate::ui_util::today()) {
-                        Ok((after, msg)) => this.lineage.runner.preview = Some((Pending::Route, after, msg)),
-                        Err(e) => this.lineage.runner.message = Some(e),
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Preview the route").clicked() {
+                        let inv = this.parent_inventory();
+                        match plan.preview_another_route(&this.kb, &inv, vets, &crate::ui_util::today()) {
+                            Ok((after, msg)) => this.lineage.runner.preview = Some((Pending::Route, after, msg)),
+                            Err(e) => {
+                                // No route of her own: say what a friend's legacy would need.
+                                this.lineage.runner.message = Some(e);
+                                this.lineage.runner.show_borrow = true;
+                            }
+                        }
                     }
-                }
+                    if ui.button("Borrow a friend's legacy").on_hover_text("What to look for among your friends' legacies").clicked() {
+                        this.lineage.runner.show_borrow = !this.lineage.runner.show_borrow;
+                    }
+                });
             };
             let keep_ui = |this: &mut Self, ui: &mut egui::Ui| {
                 ui.label(semibold("3 · Keep going", 13.5));
@@ -468,6 +493,116 @@ impl App {
                 route_ui(self, ui);
                 ui.separator();
                 keep_ui(self, ui);
+            }
+        });
+    }
+
+    /// What a friend's legacy must carry for the runner to start at A today, and a form to add
+    /// the one the player finds (round 4's "What to look for" card and Add a borrowed parent).
+    fn look_for_legacy(&mut self, ui: &mut egui::Ui, plan: &ParentPlan) {
+        let p = pal(ui);
+        let inv = plan.inventory(&self.kb, &self.parent_inventory());
+        let Some(w) = crate::parentage::jobs::borrow_wish(&self.kb, &plan.goal, &inv) else { return };
+        egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.5, p.accent.gamma_multiply(0.7))).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(semibold("What to look for in a friend's legacy", 15.0));
+                ui.label(RichText::new("The planner can't see your friends' umas: here's the one that would do it.").size(12.5).color(p.weak));
+            });
+            ui.add_space(6.0);
+            if !w.possible {
+                ui.add(egui::Label::new(RichText::new("No single friend's legacy can bring it: it needs more than three pinks, and a legacy line has three at most (hers and her two parents', 3★ each). Pick a runner with better grades here, or a lower goal.").size(13.0).color(crate::lineage_kit::ink(p.warn, p.surface))).wrap());
+                return;
+            }
+            let row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_sized(vec2(150.0, 20.0), egui::Label::new(RichText::new(label).size(12.5).color(p.weak)));
+                    add(ui);
+                });
+                ui.add_space(4.0);
+            };
+            let partner = inv.by_id(w.partner).map(|x| x.uma);
+            row(ui, "She pairs with", &mut |ui| {
+                if let Some(u) = partner {
+                    self.avatar(ui, u, 24.0);
+                    ui.label(RichText::new(format!("your #{} {}", w.partner, uma_name(&self.kb, u))).size(13.0));
+                }
+            });
+            row(ui, "She must carry", &mut |ui| {
+                for (i, n) in &w.stars {
+                    crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Pink, crate::parentage::APTITUDES[*i], 0, Some((*n).min(3) as u8), false, true);
+                    if *n > 3 {
+                        ui.label(RichText::new(format!("{n}★ in all, across her and her parents")).size(12.0).color(p.weak));
+                    }
+                }
+                if let Some(u) = w.green {
+                    let name = self.kb.sparks.get(&crate::parentage::green_spark(u, 1)).map_or_else(|| uma_name(&self.kb, u), |s| s.name.clone());
+                    crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Green, &name, 0, Some(1), false, true);
+                }
+                if w.stars.is_empty() && w.green.is_none() {
+                    ui.label(RichText::new("nothing more: any legacy works").size(12.5));
+                }
+            });
+            ui.label(RichText::new("Counting her own pink sparks and her two parents'.").size(12.0).color(p.weak));
+            ui.add_space(4.0);
+            row(ui, "Best characters", &mut |ui| {
+                for (c, aff) in w.charas.iter().take(6) {
+                    if let Some(u) = self.kb.umas.values().filter(|u| crate::affinity::chara(u.id) == *c).map(|u| u.id).min() {
+                        self.avatar(ui, u, 24.0);
+                        ui.label(RichText::new(self.kb.umas[&u].name.clone()).size(12.5)).on_hover_text(format!("affinity {aff} with your runner and partner"));
+                    }
+                }
+            });
+            ui.label(RichText::new("Any outfit counts. More affinity makes every spark likelier to fire at the inspirations.").size(12.0).color(p.weak));
+            ui.separator();
+            // The Add form.
+            ui.label(semibold("Found one? Add her", 13.5));
+            let mut uma = self.lineage.runner.add_uma;
+            let mut stars = self.lineage.runner.add_stars.clone();
+            stars.resize(w.stars.len(), 0);
+            let mut green = self.lineage.runner.add_green;
+            ui.horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt("borrow_uma").width(240.0).selected_text(uma.map_or("Her uma…".into(), |u| uma_name(&self.kb, u))).show_ui(ui, |ui| {
+                    let mut all: Vec<(String, u32)> = self.kb.umas.values().map(|u| (uma_name(&self.kb, u.id), u.id)).collect();
+                    all.sort();
+                    for (name, id) in all {
+                        ui.selectable_value(&mut uma, Some(id), name);
+                    }
+                });
+                for (k, (i, _)) in w.stars.iter().enumerate() {
+                    ui.label(RichText::new(format!("{} pink", crate::parentage::APTITUDES[*i])).size(12.5));
+                    egui::ComboBox::from_id_salt(("borrow_star", k)).width(54.0).selected_text(format!("{}★", stars[k])).show_ui(ui, |ui| {
+                        for v in 0..=9u8 {
+                            ui.selectable_value(&mut stars[k], v, format!("{v}★"));
+                        }
+                    });
+                }
+                if w.green.is_some() {
+                    crate::ui_util::UiExt::tick(ui, &mut green, "carries the unique");
+                }
+            });
+            ui.label(RichText::new("Stars across her and her two parents. Borrow her again for every career that uses her; a lineage takes one friend's legacy at most.").size(12.0).color(p.weak));
+            self.lineage.runner.add_uma = uma;
+            self.lineage.runner.add_stars = stars.clone();
+            self.lineage.runner.add_green = green;
+            let go = ui.add_enabled(uma.is_some(), crate::ui_util::primary_button(ui, "Add her and plan again", 13.0)).on_disabled_hover_text("Pick her uma first");
+            if let Some(u) = uma.filter(|_| go.clicked()) {
+                // Her pinks as sparks of up to 3★ each; the planner counts her line's total.
+                let mut own: Vec<u32> = Vec::new();
+                for ((i, _), n) in w.stars.iter().zip(&stars) {
+                    let mut left = *n;
+                    while left > 0 {
+                        let k = left.min(3);
+                        own.push(crate::parentage::pink_spark(*i, k));
+                        left -= k;
+                    }
+                }
+                if let (Some(g), true) = (w.green, green) {
+                    own.push(crate::parentage::green_spark(g, 1));
+                }
+                let b = crate::parentage::Borrow { uma: u, own, parents: [(0, vec![]), (0, vec![])] };
+                self.runner_do(move |plan, kb, inv, vets, today| Ok(plan.add_borrow(kb, inv, vets, b, today)));
+                self.lineage.runner.show_borrow = false;
             }
         });
     }

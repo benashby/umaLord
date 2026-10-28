@@ -615,8 +615,23 @@ impl App {
                             this.card_art(ui, f, art, true);
                         }
                     });
+                    // The borrowed card: what it is, and what to take instead (round 4). The
+                    // ranking's reasons are dense, so they're on hover.
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
-                        ui.label(RichText::new(format!("Borrow: {} [{}] (MLB), from a friend when the career starts.", f.uma, f.title)).size(12.0).color(p.weak));
+                        let line = ui.add(egui::Label::new(RichText::new(format!("Borrow from a friend: {} [{}], fully limit broken (MLB).", f.uma, f.title)).size(12.5)).wrap());
+                        if let Some(w) = &b.friend_why {
+                            line.on_hover_text(w);
+                        }
+                        if !b.friend_alts.is_empty() {
+                            ui.label(RichText::new("No friend has it MLB? Next best:").size(12.0).color(p.weak));
+                            for (id, why) in &b.friend_alts {
+                                ui.horizontal(|ui| {
+                                    this.card_art(ui, *id, 24.0, true).on_hover_text(why);
+                                    let c = this.kb.cards.get(id);
+                                    ui.add(egui::Label::new(RichText::new(c.map_or(id.to_string(), |c| format!("{} [{}]", c.uma, c.title))).size(12.0)).wrap()).on_hover_text(why);
+                                });
+                            }
+                        }
                     }
                 });
                 label_row(ui, "SKILLS TO TARGET", |ui| {

@@ -59,6 +59,9 @@ pub struct Brief {
     pub for_runner: Option<u32>,
     /// The runner this career's uma would replace on the team, if any.
     pub replaces: Option<u32>,
+    /// Why the borrowed card, and the next best borrows if no friend has it MLB (card, why).
+    pub friend_why: Option<String>,
+    pub friend_alts: Vec<(u32, String)>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -103,6 +106,17 @@ fn fan_line(kb: &Knowledge, trainee: u32, scenario: &str) -> String {
 const RACING: &str = "Don't run three races in a row if you can help it (a third risks her mood; a fourth costs stats).";
 
 impl App {
+    /// Why a plan's borrowed card, and up to two fallbacks, from the deck ranking's friend slot.
+    pub(crate) fn friend_picks(&mut self, plan: &Plan) -> (Option<String>, Vec<(u32, String)>) {
+        let saved = std::mem::replace(&mut self.planner.plan, plan.clone());
+        let deck = [plan.deck[0], plan.deck[1], plan.deck[2], plan.deck[3], plan.deck[4], plan.friend];
+        let picks = crate::recommend::rank_slot(&self.rank_context(), &deck, 5);
+        self.planner.plan = saved;
+        let why = picks.iter().find(|c| Some(c.id) == plan.friend).map(|c| c.reason.clone()).filter(|r| !r.is_empty());
+        let alts = picks.iter().filter(|c| Some(c.id) != plan.friend).take(2).map(|c| (c.id, c.reason.clone())).collect();
+        (why, alts)
+    }
+
     /// The skills on a runner's plan that can't help her in its race: tied to another style,
     /// distance, surface or racecourse, or turned off there. Checked from each skill's own
     /// conditions, apart from the pickers that chose them.
@@ -173,6 +187,7 @@ impl App {
         self.recommend_deck(true);
         self.rating_auto_pick();
         let plan = std::mem::replace(&mut self.planner.plan, saved);
+        let (friend_why, friend_alts) = self.friend_picks(&plan);
         let kb = &self.kb;
         let mut races: Vec<String> = run.g1s.iter().map(|(n, c)| format!("Win {n} (+{} affinity)", 3 * u32::from(*c))).collect();
         races.push("Trackblazer is built on racing (30 to 40 races a career): pick the G1s above among them.".into());
@@ -226,6 +241,8 @@ impl App {
             step: Some(step + 1),
             for_runner: Some(goal.runner),
             replaces: None,
+            friend_why,
+            friend_alts,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -277,6 +294,8 @@ impl App {
             step: None,
             for_runner: None,
             replaces: None,
+            friend_why: None,
+            friend_alts: Vec::new(),
             mode: "Manual career".into(),
             setup,
             why,
@@ -334,6 +353,7 @@ impl App {
         let parents = ace.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
         let mut b = self.runner_brief(format!("Her own career for CM {} ({}): she wins most head to head, so she's the ace.", team.event.id, team.event.name), &ace.plan, Some((ace.plan.target[1], team.event.course_name.clone())), parents);
         b.legacies = legacies_of(ace.parents.now.as_ref(), inv);
+        (b.friend_why, b.friend_alts) = self.friend_picks(&ace.plan);
         Some(b)
     }
 
@@ -378,6 +398,7 @@ impl App {
                 let mut b = self.runner_brief(format!("Her own career for Team Trials ({}), to replace {replaced}, whose unique fires unreliably.", row.name), &plan, Some((plan.target[1], row.name.to_string())), parents);
                 b.legacies = legacies_of(best.as_ref(), inv);
                 b.replaces = Some(s.trainee);
+                (b.friend_why, b.friend_alts) = self.friend_picks(&plan);
                 return Some(b);
             }
         }
@@ -388,6 +409,7 @@ impl App {
         let parents = s.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
         let mut b = self.runner_brief(format!("Her own career for Team Trials ({}): she scores lowest on the team, so a better run of her raises it most.", row.name), &s.plan, Some((s.plan.target[1], row.name.to_string())), parents);
         b.legacies = legacies_of(s.parents.now.as_ref(), inv);
+        (b.friend_why, b.friend_alts) = self.friend_picks(&s.plan);
         Some(b)
     }
 }
