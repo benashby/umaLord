@@ -66,6 +66,7 @@ pub(crate) struct LineageState {
     /// When the last build arrived (screenshots give its art a moment to load).
     pub done_at: Option<f64>,
     pub tt_built: Option<Result<Built, String>>,
+    pub runner: crate::lineage_runner::RunnerState,
 }
 
 impl App {
@@ -77,9 +78,7 @@ impl App {
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 12 })).show(ui, |ui| match self.lineage.view {
             LineageView::Cm => self.lineage_cm(ui),
             LineageView::Tt => self.lineage_tt(ui),
-            LineageView::Runner => {
-                ui.label(RichText::new("One runner's plan comes next.").color(pal(ui).weak));
-            }
+            LineageView::Runner => self.lineage_runner(ui),
         });
     }
 
@@ -163,7 +162,7 @@ impl App {
     /// at 1200 px and wider, a fixed 480 px action pane (the Next career card) beside the
     /// overview, each scrolling on its own so the setup stays in view; narrower, one column,
     /// the card first.
-    fn panes(&mut self, ui: &mut egui::Ui, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
+    pub(crate) fn panes(&mut self, ui: &mut egui::Ui, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let wide = ui.available_width() >= WIDE;
         head(self, ui);
         ui.add_space(8.0);
@@ -508,7 +507,7 @@ impl App {
     /// The Next career card (round 8's 8a): who and why with Start this career; How (Independent
     /// Training with its setup panel, or a manual career); then parents, scenario, deck and
     /// skills beside stats, races and keep-if; the odds strip last.
-    fn next_card(&mut self, ui: &mut egui::Ui, b: &Brief) {
+    pub(crate) fn next_card(&mut self, ui: &mut egui::Ui, b: &Brief) {
         let p = pal(ui);
         let it = b.mode != "Manual career";
         let wide = ui.available_width() >= 1100.0;
