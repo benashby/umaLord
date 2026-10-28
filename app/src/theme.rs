@@ -506,16 +506,17 @@ fn is_static(path: &std::path::Path, index: u32) -> bool {
 }
 
 /// Static subsets of Noto Emoji, DejaVu Sans, DejaVu Sans Mono, Noto Sans Symbols, Noto Sans
-/// Math and Noto Sans Symbols 2 with every symbol the app and its data draw (`tools/subset_fonts.py`; licenses beside
+/// Math, Noto Sans Symbols 2 and Noto Sans CJK JP (its full-width forms, ＋ among them) with every symbol the app and its data draw (`tools/subset_fonts.py`; licenses beside
 /// them). Windows has these in Segoe UI Symbol; elsewhere no font is everywhere, and egui can't
 /// draw a variable font (which Noto Emoji is).
-const BUNDLED: [(&str, &[u8]); 6] = [
+const BUNDLED: [(&str, &[u8]); 7] = [
     ("Bundled emoji", include_bytes!("../assets/fonts/NotoEmoji-umaLord.ttf")),
     ("Bundled DejaVu", include_bytes!("../assets/fonts/DejaVuSans-umaLord.ttf")),
     ("Bundled DejaVu Mono", include_bytes!("../assets/fonts/DejaVuSansMono-umaLord.ttf")),
     ("Bundled symbols", include_bytes!("../assets/fonts/NotoSansSymbols-umaLord.ttf")),
     ("Bundled math", include_bytes!("../assets/fonts/NotoSansMath-umaLord.ttf")),
     ("Bundled symbols 2", include_bytes!("../assets/fonts/NotoSansSymbols2-umaLord.ttf")),
+    ("Bundled full-width", include_bytes!("../assets/fonts/NotoSansCJKjp-umaLord.ttf")),
 ];
 
 const REGULAR: SystemFont = SystemFont {

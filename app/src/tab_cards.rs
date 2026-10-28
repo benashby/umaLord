@@ -1342,6 +1342,12 @@ impl App {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         lb_widget(ui, card.lb, 7.0);
+                        if card.lb < 4 {
+                            let next = if card.lb == 3 { "MLB".to_string() } else { format!("LB{}", card.lb + 1) };
+                            if ui.small_btn(RichText::new("＋").color(p.weak)).on_hover_text(format!("Pulled another copy? Raise it to {next} and save it. Shortcut: +")).clicked() {
+                                self.raise_card(card.id);
+                            }
+                        }
                     });
                     let cap = card.rarity.max_level(card.lb);
                     ui.label(format!("Level {} / {cap}", card.level));

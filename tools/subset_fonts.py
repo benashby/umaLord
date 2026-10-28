@@ -3,15 +3,17 @@
 Windows draws the app's icons and symbols with Segoe UI Symbol; elsewhere there's no font
 everyone has, and egui can't draw a variable font's glyphs (Noto Emoji ships only as one). So
 the app embeds small static subsets of Noto Emoji, DejaVu Sans, DejaVu Sans Mono, Noto Sans
-Symbols, Noto Sans Math and Noto Sans Symbols 2, covering every symbol in the source and the game
-data. Rerun this
+Symbols, Noto Sans Math, Noto Sans Symbols 2 and Noto Sans CJK JP (only the full-width forms the
+app uses, such as ＋, which a system's Japanese font may lack), covering every symbol in the
+source and the game data. Rerun this
 when the app gains a symbol (agent::tests::tool_icons_render fails on a missing one) or after a
 knowledge update.
 
 Needs fontTools (pip install fonttools). Run from the repo root with the source fonts, in the
 order they should be tried (emoji first, as Segoe UI Symbol draws them):
   python -I tools/subset_fonts.py NotoEmoji.ttf DejaVuSans.ttf DejaVuSansMono.ttf \
-      NotoSansSymbols.ttf NotoSansMath-Regular.otf NotoSansSymbols2-Regular.otf
+      NotoSansSymbols.ttf NotoSansMath-Regular.otf NotoSansSymbols2-Regular.otf \
+      NotoSansCJKjp-Regular.otf
 Each font gets the symbols the ones before it lack, written as <name>-umaLord.ttf, and a
 variable font is pinned to its Regular weight. Noto comes from github.com/notofonts and
 github.com/googlefonts/noto-emoji, DejaVu from github.com/dejavu-fonts/dejavu-fonts. The app
@@ -36,9 +38,9 @@ LIBRARY_SYMBOLS = "🗐✔"
 
 def wanted() -> set[int]:
     """Symbols in the source and data, and LIBRARY_SYMBOLS: everything from General Punctuation
-    up, minus CJK, Hangul, full-width forms, variation selectors and joiners, which other fonts
+    up, minus CJK, Hangul, half-width katakana, variation selectors and joiners, which other fonts
     cover."""
-    skip = [(0x3000, 0x9FFF), (0xAC00, 0xD7AF), (0xFF00, 0xFFEF), (0xFE00, 0xFE0F), (0xE000, 0xF8FF), (0xF0000, 0x10FFFF)]
+    skip = [(0x3000, 0x9FFF), (0xAC00, 0xD7AF), (0xFF61, 0xFF9F), (0xFE00, 0xFE0F), (0xE000, 0xF8FF), (0xF0000, 0x10FFFF)]
     out = set(map(ord, LIBRARY_SYMBOLS))
     for path in SOURCES:
         for ch in path.read_text(encoding="utf-8"):
