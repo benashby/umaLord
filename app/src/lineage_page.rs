@@ -248,7 +248,6 @@ impl App {
     fn plan_alone(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
         egui::ScrollArea::vertical().id_salt("lineage_alone").auto_shrink([false, false]).show(ui, |ui| {
             if self.plan_building(which) {
-                ui.set_max_width(900.0);
                 self.build_log(ui, which);
             } else {
                 self.plan_empty(ui, which);

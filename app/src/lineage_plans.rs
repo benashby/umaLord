@@ -50,6 +50,10 @@ pub(crate) struct PlansUi {
     notices: Vec<(Which, std::time::Instant, Vec<Notice>)>,
     /// The one-runner plan as last read, for its Overview card (same rule).
     runner: Option<(std::time::Instant, Option<crate::parentage::track::ParentPlan>)>,
+    /// The Overview cards' header-and-body heights last frame, and whether they sit in a row
+    /// (then each pads to the tallest, so the cards and their footers line up).
+    card_h: [f32; 3],
+    level: bool,
 }
 
 /// How long worked-out notices stand (an import elsewhere shows within this).
@@ -264,6 +268,7 @@ impl App {
             });
             ui.add_space(10.0);
             let wide = ui.available_width() >= 1000.0;
+            self.lineage.p.level = wide;
             let cards: [fn(&mut App, &mut egui::Ui); 3] = [App::overview_cm, App::overview_tt, App::overview_runner];
             if wide {
                 let w = (ui.available_width() - 2.0 * 14.0) / 3.0;
@@ -287,24 +292,35 @@ impl App {
         });
     }
 
-    /// A card's frame: the title row with its state pill and Open, then the body.
-    fn overview_card(&mut self, ui: &mut egui::Ui, icon: &str, title: &str, state: (&str, egui::Color32), open: Option<LineageView>, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
+    /// A card: the title row with its state pill, the body, then a footer row with the card's
+    /// action. In a row of cards each body pads to the tallest, so the cards are one height and
+    /// their footers line up.
+    fn overview_card(&mut self, ui: &mut egui::Ui, slot: usize, icon: &str, title: &str, state: (&str, egui::Color32), body: impl FnOnce(&mut Self, &mut egui::Ui), footer: impl FnOnce(&mut Self, &mut egui::Ui)) {
         crate::ui_util::card(ui, |ui| {
             ui.set_width(ui.available_width());
+            let top = ui.cursor().top();
             ui.horizontal(|ui| {
                 ui.set_min_height(30.0);
                 ui.label(semibold(format!("{icon} {title}"), size::LG));
                 pill(ui, state.0, state.1);
-                if let Some(v) = open {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        if ui.button("Open ›").clicked() {
-                            self.lineage.view = v;
-                        }
-                    });
-                }
             });
             ui.add_space(6.0);
             body(self, ui);
+            let own = ui.cursor().top() - top;
+            if self.lineage.p.level {
+                let tallest = self.lineage.p.card_h.iter().copied().fold(own, f32::max);
+                ui.add_space(tallest - own);
+            }
+            if (self.lineage.p.card_h[slot] - own).abs() > 0.5 {
+                self.lineage.p.card_h[slot] = own;
+                ui.ctx().request_repaint();
+            }
+            ui.add_space(8.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.set_min_height(32.0);
+                footer(self, ui);
+            });
         });
     }
 
@@ -312,9 +328,7 @@ impl App {
         let p = pal(ui);
         let today = crate::ui_util::today();
         let Some(ev) = self.kb.upcoming_cms(&today).first().map(|e| (*e).clone()) else {
-            self.overview_card(ui, "🏆", "Champions Meeting", ("No CM scheduled", p.weak), None, |_, ui| {
-                prose(ui, "No upcoming Champions Meeting is in the schedule yet.", 13.0, pal(ui).weak);
-            });
+            self.overview_card(ui, 0, "🏆", "Champions Meeting", ("No CM scheduled", p.weak), |_, ui| prose(ui, "No upcoming Champions Meeting is in the schedule yet.", 13.0, pal(ui).weak), |_, _| {});
             return;
         };
         // The plan for the next CM, else the newest plan for a later one.
@@ -332,7 +346,8 @@ impl App {
             ("In progress", p.accent)
         };
         let course = format!("CM {} · {} · {}", ev.id, ev.name, ev.course_name);
-        self.overview_card(ui, "🏆", "Champions Meeting", state, plan.is_some().then_some(LineageView::Cm), |this, ui| {
+        let has = plan.is_some();
+        self.overview_card(ui, 0, "🏆", "Champions Meeting", state, |this, ui| {
             let p = pal(ui);
             match &plan {
                 Some(plan) => {
@@ -367,8 +382,7 @@ impl App {
             if notices.len() > 1 {
                 ui.label(RichText::new(format!("and {} more in the plan", notices.len() - 1)).size(12.0).color(p.weak));
             }
-            this.overview_footer(ui, which, plan.is_some(), LineageView::Cm);
-        });
+        }, |this, ui| this.overview_footer(ui, which, has, LineageView::Cm));
     }
 
     fn overview_tt(&mut self, ui: &mut egui::Ui) {
@@ -386,7 +400,8 @@ impl App {
         } else {
             ("In progress", p.accent)
         };
-        self.overview_card(ui, "🏟", "Team Trials", state, plan.is_some().then_some(LineageView::Tt), |this, ui| {
+        let has = plan.is_some();
+        self.overview_card(ui, 1, "🏟", "Team Trials", state, |this, ui| {
             let p = pal(ui);
             for n in notices.iter().take(1) {
                 this.notice_box(ui, which, n);
@@ -418,8 +433,7 @@ impl App {
                 }
                 None => prose(ui, "Fifteen runners over five races, an Ace for each, today's team to beat, and the career that raises it most.", 13.5, p.text),
             }
-            this.overview_footer(ui, which, plan.is_some(), LineageView::Tt);
-        });
+        }, |this, ui| this.overview_footer(ui, which, has, LineageView::Tt));
     }
 
     fn overview_runner(&mut self, ui: &mut egui::Ui) {
@@ -433,7 +447,8 @@ impl App {
             }
         };
         let state = if plan.is_some() { ("In progress", p.accent) } else { ("No plan", p.weak) };
-        self.overview_card(ui, "🌱", "One runner", state, plan.is_some().then_some(LineageView::Runner), |this, ui| {
+        let has = plan.is_some();
+        self.overview_card(ui, 2, "🌱", "One runner", state, |this, ui| {
             let p = pal(ui);
             match &plan {
                 Some(plan) => {
@@ -450,43 +465,45 @@ impl App {
                     };
                     prose(ui, &line, 13.5, p.text);
                 }
-                None => {
-                    prose(ui, "One uma and a goal: each parent career it takes to get her there, in order.", 13.5, p.text);
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if ui.add(crate::ui_util::primary_button(ui, "Create plan…", 13.5)).clicked() {
-                            this.lineage.view = LineageView::Runner;
-                        }
-                        ui.label(RichText::new("pick her, then a few seconds").size(12.0).color(p.weak));
-                    });
+                None => prose(ui, "One uma and a goal: each parent career it takes to get her there, in order.", 13.5, p.text),
+            }
+        }, |this, ui| {
+            if has {
+                if ui.button("Open ›").clicked() {
+                    this.lineage.view = LineageView::Runner;
                 }
+            } else {
+                if ui.add(crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_hover_text("Opens One runner, where you pick her and her goal.").clicked() {
+                    this.lineage.view = LineageView::Runner;
+                }
+                ui.label(RichText::new("pick her, then a few seconds").size(12.0).color(pal(ui).weak));
             }
         });
     }
 
-    /// A card's footer: the build's stage while one runs, else Create plan when there's none.
+    /// A team card's footer: the build's stage while one runs, Open when there's a plan, else
+    /// Create plan.
     fn overview_footer(&mut self, ui: &mut egui::Ui, which: Which, has_plan: bool, view: LineageView) {
         let p = pal(ui);
         if let Some(job) = self.lineage.p.job.as_ref().filter(|j| j.which == which) {
-            ui.add_space(8.0);
             let stage = job.stages.last().map_or("Starting…".to_string(), |s| s.title.clone());
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(RichText::new(format!("{stage} · stage {} of about 7", job.stages.len().max(1))).size(12.5).color(p.weak));
-            });
-            return;
-        }
-        if !has_plan {
-            ui.add_space(8.0);
+            ui.spinner();
+            ui.label(RichText::new(format!("{stage} · stage {} of 7", job.stages.len().max(1))).size(12.5).color(p.weak));
+            if ui.link("Watch").clicked() {
+                self.lineage.view = view;
+            }
+        } else if has_plan {
+            if ui.button("Open ›").clicked() {
+                self.lineage.view = view;
+            }
+        } else {
             let ctx = ui.ctx().clone();
-            ui.horizontal(|ui| {
-                let busy = self.lineage.p.job.is_some();
-                if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_disabled_hover_text("Another plan is being made; wait for it to finish.").clicked() {
-                    self.lineage.view = view;
-                    self.plan_start(&ctx, which, Choices::default());
-                }
-                ui.label(RichText::new(format!("takes {}", how_long(which))).size(12.0).color(p.weak));
-            });
+            let busy = self.lineage.p.job.is_some();
+            if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_disabled_hover_text("Another plan is being made; wait for it to finish.").clicked() {
+                self.lineage.view = view;
+                self.plan_start(&ctx, which, Choices::default());
+            }
+            ui.label(RichText::new(format!("takes {}", how_long(which))).size(12.0).color(p.weak));
         }
     }
 
@@ -902,21 +919,14 @@ impl App {
             };
             let left = typical - elapsed;
             ui.add_space(6.0);
-            ui.add(egui::ProgressBar::new(done as f32 / all.len() as f32).desired_height(6.0).desired_width(ui.available_width().min(560.0)));
+            ui.add(egui::ProgressBar::new(done as f32 / all.len() as f32).desired_height(6.0).desired_width(ui.available_width()));
             ui.label(
                 RichText::new(format!("Stage {} of {} · {}", stages.len().max(1), all.len(), if left >= 1.5 { format!("about {left:.0} s left") } else { "almost done".into() }))
                     .size(12.5)
                     .color(p.weak),
             );
-            ui.add_space(6.0);
-            stage_list(ui, &stages, true);
-            // The stages still to come, greyed.
-            for (i, t) in all.iter().enumerate().filter(|(_, t)| !stages.iter().any(|s| s.title == **t)) {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("○").color(p.weak));
-                    ui.label(RichText::new(format!("{}. {t}", i + 1)).size(13.5).color(p.weak));
-                });
-            }
+            ui.add_space(12.0);
+            stage_list(ui, &stages, true, all);
         });
         if cancel {
             if let Some(j) = &self.lineage.p.job {
@@ -933,33 +943,79 @@ impl App {
         }
         ui.add_space(12.0);
         remembered_section(ui, &format!("chosen-{}", label(which)), "How this plan was chosen", false, |ui| {
-            stage_list(ui, &plan.log, false);
+            stage_list(ui, &plan.log, false, &[]);
         });
     }
 }
 
-/// Stages with a tick (or a spinner for the running one), time and lines.
-fn stage_list(ui: &mut egui::Ui, stages: &[Stage], live: bool) {
+/// Stages with a tick (or a spinner for the running one), time and lines. Wide, each stage is a
+/// row: its number, title and time on the left, what it found on the right; narrow, the lines
+/// sit under the title. The stages still to come follow, greyed, when `to_come` names them.
+fn stage_list(ui: &mut egui::Ui, stages: &[Stage], live: bool, to_come: &[&str]) {
     let p = pal(ui);
-    for (i, s) in stages.iter().enumerate() {
-        let running = live && s.secs.is_none() && i + 1 == stages.len();
-        ui.horizontal(|ui| {
-            if running {
-                ui.spinner();
-            } else {
-                ui.label(RichText::new("✔").color(p.accent).strong());
-            }
-            ui.label(semibold(format!("{}. {}", i + 1, s.title), 13.5));
-            if let Some(t) = s.secs {
-                ui.label(RichText::new(if t < 0.05 { "under 0.1 s".to_string() } else { format!("{t:.1} s") }).size(12.0).color(p.weak));
-            }
-        });
-        for l in &s.lines {
+    let wide = ui.available_width() >= 900.0;
+    let left_w = 300.0;
+    let mut rows: Vec<(usize, &str, Option<&Stage>)> = stages.iter().enumerate().map(|(i, s)| (i, s.title.as_str(), Some(s))).collect();
+    rows.extend(to_come.iter().enumerate().filter(|(_, t)| !stages.iter().any(|s| s.title == **t)).map(|(i, t)| (i, *t, None)));
+    for (k, (i, title, stage)) in rows.into_iter().enumerate() {
+        if k > 0 {
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        let running = live && stage.is_some_and(|s| s.secs.is_none());
+        let head = |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
+                match stage {
+                    _ if running => {
+                        ui.spinner();
+                    }
+                    Some(_) => {
+                        ui.label(RichText::new("✔").color(p.accent).strong().size(15.0));
+                    }
+                    None => {
+                        ui.label(RichText::new("○").color(p.weak).size(15.0));
+                    }
+                }
+                let ink = if stage.is_some() { p.text } else { p.weak };
+                ui.label(semibold(format!("{}. {title}", i + 1), 14.5).color(ink));
+            });
+            if let Some(t) = stage.and_then(|s| s.secs) {
+                ui.horizontal(|ui| {
+                    ui.add_space(26.0);
+                    ui.label(RichText::new(if t < 0.05 { "under 0.1 s".to_string() } else { format!("{t:.1} s") }).size(12.5).color(p.weak));
+                });
+            } else if running {
+                ui.horizontal(|ui| {
+                    ui.add_space(26.0);
+                    ui.label(RichText::new("running…").size(12.5).color(p.weak));
+                });
+            }
+        };
+        let lines = |ui: &mut egui::Ui| {
+            for l in stage.map(|s| s.lines.as_slice()).unwrap_or_default() {
+                ui.label(RichText::new(l).size(13.5).color(p.text.gamma_multiply(0.92)));
+                ui.add_space(2.0);
+            }
+        };
+        if wide {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(left_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(left_w);
+                    head(ui);
+                });
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_max_width(ui.available_width().min(900.0));
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    lines(ui);
+                });
+            });
+        } else {
+            head(ui);
+            ui.horizontal_top(|ui| {
                 ui.add_space(26.0);
-                ui.vertical(|ui| prose(ui, l, 12.5, p.weak));
+                ui.vertical(|ui| lines(ui));
             });
         }
-        ui.add_space(4.0);
     }
 }
