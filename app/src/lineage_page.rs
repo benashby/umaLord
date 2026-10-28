@@ -18,6 +18,8 @@ use std::sync::mpsc::{Receiver, channel};
 const WIDE: f32 = 1200.0;
 const ACTION_W: f32 = 480.0;
 const PANE_GAP: f32 = 24.0;
+/// Prose stops at about 80 characters a line (WCAG 1.4.8).
+const PROSE_W: f32 = 580.0;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(crate) enum LineageView {
@@ -171,7 +173,12 @@ impl App {
                 ui.allocate_ui_with_layout(vec2(ACTION_W, h), egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_width(ACTION_W);
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                    egui::ScrollArea::vertical().id_salt("lineage_action").auto_shrink([false, false]).show(ui, |ui| action(self, ui));
+                    let mut sa = egui::ScrollArea::vertical().id_salt("lineage_action").auto_shrink([false, false]);
+                    // UMALORD_SCROLL holds the action pane scrolled down, for screenshots.
+                    if let Some(y) = std::env::var("UMALORD_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+                        sa = sa.vertical_scroll_offset(y);
+                    }
+                    sa.show(ui, |ui| action(self, ui));
                 });
                 ui.add_space(PANE_GAP);
                 let rest = ui.available_width();
@@ -299,7 +306,7 @@ impl App {
             let w = ui.available_width();
             let narrow = w < 1000.0;
             let (race_w, gain_w) = (110.0, 80.0);
-            let rest = w - race_w - gain_w - 24.0;
+            let rest = w - race_w - gain_w - 3.0 * ui.spacing().item_spacing.x - 4.0;
             let (today_w, plan_w) = if narrow { (rest, rest) } else { (rest * 0.47, rest * 0.53) };
             let head = |ui: &mut egui::Ui, text: &str, width: f32| {
                 let (r, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
@@ -354,6 +361,7 @@ impl App {
                         ui.allocate_ui_with_layout(vec2(today_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.set_width(today_w);
                             today_ui(ui);
+                            ui.label(RichText::new("Plan").size(11.5).strong().color(p.weak));
                             plan_ui(ui);
                         });
                     } else {
@@ -367,7 +375,7 @@ impl App {
                         });
                     }
                     // A fixed cell: a layout here would take the whole page's height.
-                    let (cell, _) = ui.allocate_exact_size(vec2(ui.available_width().max(gain_w), 24.0), Sense::hover());
+                    let (cell, _) = ui.allocate_exact_size(vec2(gain_w, 24.0), Sense::hover());
                     let (text, color) = match row.gain {
                         Some(g) => (format!("{}{}", if g >= 0.0 { "+" } else { "" }, thousands(g)), if g >= 0.0 { p.good } else { p.warn }),
                         None => ("—".to_string(), p.weak),
@@ -408,8 +416,9 @@ impl App {
                 ui.horizontal(|ui| {
                     self.avatar(ui, r.trainee, 48.0);
                     ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(semibold(crate::parentage::uma_name(&self.kb, r.trainee), 15.0));
+                        // Name and Ace wrap together inside the card's width.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(egui::Label::new(semibold(crate::parentage::uma_name(&self.kb, r.trainee), 15.0)).wrap());
                             if ace {
                                 pill(ui, "★ Ace", pal(ui).gold);
                             }
@@ -439,6 +448,8 @@ impl App {
                 });
                 let lineage = if r.parents.now.as_ref().is_some_and(crate::parentage::score::Lineage::meets) {
                     "Her lineage is ready.".to_string()
+                } else if r.parents.steps.is_empty() {
+                    "No lineage reaches her targets under the cap yet.".to_string()
                 } else {
                     format!("Waiting on {} parent step{}.", r.parents.steps.len(), if r.parents.steps.len() == 1 { "" } else { "s" })
                 };
@@ -454,7 +465,7 @@ impl App {
         } else {
             ui.columns(n, |cols| {
                 for (i, (col, r)) in cols.iter_mut().zip(&team.runners).enumerate() {
-                    draw(col, r, ace == Some(i));
+                    col.with_layout(egui::Layout::top_down(egui::Align::Min), |col| draw(col, r, ace == Some(i)));
                 }
             });
         }
@@ -523,13 +534,14 @@ impl App {
                     });
                     let full = crate::parentage::uma_name(&self.kb, b.trainee);
                     let (name, outfit) = full.split_once(" [").map_or((full.clone(), String::new()), |(n, o)| (n.to_string(), format!("[{o}")));
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 5.0;
-                        ui.label(semibold("Next:", 19.0).color(p.weak));
-                        ui.label(semibold(&name, 19.0));
-                        ui.label(RichText::new(&outfit).size(17.0).color(p.weak));
-                        ui.label(semibold(format!("as {}", style_article(b.style)), 19.0));
-                    });
+                    // One left-aligned text that wraps as a whole, never mid-word.
+                    let mut job = egui::text::LayoutJob::default();
+                    let bold = |sz: f32| FontId::new(sz, egui::FontFamily::Name(crate::theme::SEMIBOLD.into()));
+                    job.append("Next: ", 0.0, egui::TextFormat { font_id: bold(19.0), color: p.weak, ..Default::default() });
+                    job.append(&name, 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
+                    job.append(&format!(" {outfit} "), 0.0, egui::TextFormat { font_id: FontId::proportional(17.0), color: p.weak, ..Default::default() });
+                    job.append(&format!("as {}", style_article(b.style)), 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
+                    ui.add(egui::Label::new(job).wrap());
                     ui.label(RichText::new(&b.why).size(13.0).color(p.weak));
                 });
                 if !narrow_card {
@@ -610,7 +622,7 @@ impl App {
             let right = |this: &Self, ui: &mut egui::Ui| {
                 label_row(ui, "STATS", |ui| {
                     for n in &b.stat_notes {
-                        ui.add(egui::Label::new(RichText::new(n).size(12.5)).wrap());
+                        prose(ui, n, 12.5, p.text);
                     }
                 });
                 if !b.agenda.is_empty() {
@@ -650,8 +662,8 @@ impl App {
             };
             if wide {
                 ui.columns(2, |cols| {
-                    left(self, &mut cols[0]);
-                    right(self, &mut cols[1]);
+                    cols[0].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| left(self, ui));
+                    cols[1].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| right(self, ui));
                 });
             } else {
                 left(self, ui);
@@ -706,9 +718,9 @@ impl App {
                     ui.label(RichText::new("TRAINING FOCUS").size(11.5).strong().color(p.weak));
                     crate::lineage_kit::segmented(ui, &["Balanced", "Stamina", "Sprint"], &focus, p.accent, p.on_accent, p.weak, p.input);
                     let why = if b.step.is_some() { "Parent careers train Balanced, or Stamina when the step's stat aim is Stamina. Never Sprint: speed isn't what a parent run is for." } else { "Stamina when her floor is 900 or more, Sprint at 650 or less, otherwise Balanced." };
-                    ui.add(egui::Label::new(RichText::new(why).size(12.5).color(p.weak)).wrap());
+                    prose(ui, why, 12.5, p.weak);
                     ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new("You still buy the skills at the end, and the spark reroll works as usual.").size(12.5).color(p.weak)).wrap());
+                    prose(ui, "You still buy the skills at the end, and the spark reroll works as usual.", 12.5, p.weak);
                 }
                 1 => {
                     ui.label(RichText::new(format!("PRIORITIZED SKILLS · {} of {} entered", ticks.iter().filter(|t| **t).count(), ticks.len())).size(11.5).strong().color(p.weak));
@@ -744,7 +756,8 @@ impl App {
             if cols == 3 {
                 ui.columns(3, |c| {
                     for (k, col) in c.iter_mut().enumerate() {
-                        draw(col, k);
+                        // ui.columns justifies its children; prose reads better ragged.
+                        col.with_layout(egui::Layout::top_down(egui::Align::Min), |col| draw(col, k));
                     }
                 });
             } else {
@@ -907,15 +920,27 @@ fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: b
     st.show_body_unindented(ui, body);
 }
 
+/// A paragraph, ragged right and no wider than about 80 characters.
+fn prose(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
+    let w = ui.available_width().min(PROSE_W);
+    ui.allocate_ui_with_layout(vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(RichText::new(text).size(size).color(color)).wrap());
+    });
+}
+
 /// A labelled row: the label in a fixed column, the content beside it in the rest of the width
 /// (a fixed width, so wrapped content wraps instead of squeezing).
 fn label_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     let weak = pal(ui).weak;
-    let label_w = 118.0;
+    // Narrower labels in a narrow card, so the deck's six cards fit on one row.
+    let label_w = if ui.available_width() < 560.0 { 84.0 } else { 118.0 };
     let w = ui.available_width();
     ui.horizontal_top(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(label_w, 18.0), Sense::hover());
-        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, label, FontId::new(11.5, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), weak);
+        // The label wraps within its column ("SKILLS TO / TARGET") rather than running into the value.
+        let galley = ui.painter().layout(label.to_string(), FontId::new(11.5, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), weak, label_w - 6.0);
+        let (r, _) = ui.allocate_exact_size(vec2(label_w, galley.size().y.max(18.0)), Sense::hover());
+        ui.painter().galley(pos2(r.left(), r.top() + 2.0), galley, weak);
         let rest = (w - label_w - ui.spacing().item_spacing.x).max(120.0);
         ui.allocate_ui_with_layout(vec2(rest, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_max_width(rest);

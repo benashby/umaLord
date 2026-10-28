@@ -5,7 +5,7 @@
 #
 # Usage: tools/shots.sh <out dir> <account folder> <name> <WxH> [VAR=value ...]
 #   e.g. tools/shots.sh /tmp/shots accounts/mine home-dark 1600x1000 UMALORD_TAB=home UMALORD_THEME=dark
-# Writes <out dir>/<name>-<WxH>.png. Build first: (cd app && cargo build --release).
+# Writes <out dir>/<name>-<WxH>.png. It builds the release binary first.
 # Needs nix (it runs sway from nixpkgs) and the devShell's LD_LIBRARY_PATH, which it takes from
 # `nix develop`. The output folder must be outside the repo.
 set -euo pipefail
@@ -15,6 +15,8 @@ case "$(realpath -m "$out")/" in "$repo"/*) echo "shots.sh: write outside the re
 mkdir -p "$out"
 png="$(realpath -m "$out")/$name-$size.png"
 rm -f "$png"
+# Build first: a stale binary makes a render that doesn't show the latest change.
+(cd "$repo/app" && nix develop -c bash -c 'cargo build --release -q' >/dev/null 2>&1) || { echo "shots.sh: build failed" >&2; exit 1; }
 ld=$(cd "$repo" && nix develop -c bash -c 'echo "$LD_LIBRARY_PATH"' 2>/dev/null | tail -1)
 # A short private runtime folder: sway's socket path must fit in sun_path.
 run=$(mktemp -d /tmp/umx.XXXXXX)
