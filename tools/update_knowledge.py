@@ -362,7 +362,11 @@ def build(chunks: dict, sources: dict) -> None:
     for c in chars:
         skill_ids = [int(x) for x in str(c.get("skillIds") or "").split(",") if x.strip()]
         potential = {p["skillId"]: p["needRank"] for p in c.get("potentialSkills", [])}
-        unique = next((s for s in skill_ids if s not in potential), None)
+        # The game numbers each outfit's unique 1, outfit - 1, the chara id's last three digits, 1:
+        # Grass Wonder's second outfit (101102) has 110111. uma.guide's skillIds can lead with
+        # the first outfit's unique, so take the game's id when it exists.
+        own = 100000 + (c["cardId"] % 100 - 1) * 10000 + (c["charaId"] % 1000) * 10 + 1
+        unique = own if own in names else next((s for s in skill_ids if s not in potential), None)
         events, event_skills = [], []
         for e in events_by_card.get(c["cardId"], []):
             opts = []
