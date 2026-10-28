@@ -368,7 +368,7 @@ impl App {
                     job.append(&name, 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
                     job.append(&format!(" {outfit} "), 0.0, egui::TextFormat { font_id: FontId::proportional(17.0), color: p.weak, ..Default::default() });
                     job.append(&format!("as {}", style_article(b.style)), 0.0, egui::TextFormat { font_id: bold(19.0), color: p.text, ..Default::default() });
-                    ui.add(egui::Label::new(job).wrap());
+                    ui.add(egui::Label::new(job).wrap()).on_hover_text(crate::lineage_steps::style_hint(b.style.label()).unwrap_or_default());
                     ui.label(RichText::new(&b.why).size(13.0).color(p.weak));
                 });
                 if !narrow_card {
@@ -420,7 +420,7 @@ impl App {
                     if b.legacies.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&b.parents).size(13.0)).wrap());
                     } else {
-                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak, hover: None }).collect();
+                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak, hover: Some(crate::lineage_steps::explain("vet").to_string()) }).collect();
                         this.who_flow(ui, &items);
                     }
                     if let Some(n) = &b.inherit {
@@ -444,7 +444,7 @@ impl App {
                     });
                     // The borrowed card, and on request what to look for.
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
-                        ui.add(egui::Label::new(RichText::new(format!("Borrow: {} [{}] (MLB)", f.uma, f.title)).size(12.5)).wrap());
+                        ui.add(egui::Label::new(RichText::new(format!("Borrow: {} [{}] (MLB)", f.uma, f.title)).size(12.5)).wrap()).on_hover_text(crate::lineage_steps::explain("mlb"));
                         if ui.link(if look_open { "Hide what to look for" } else { "What to look for" }).clicked() {
                             look_toggle = true;
                         }

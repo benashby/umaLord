@@ -21,8 +21,25 @@ fn meaning(term: &str) -> &'static str {
         "round" => "Points one Team Trials round scores.",
         "today" => "Your best finished umas, as they race now: no new careers.",
         "inherit" => "A finished uma passes some of what she has on to the umas she parents; these are her sparks.",
+        "front" => "Front Runner: leads from the start and tries to stay in front.",
+        "pace" => "Pace Chaser: runs just behind the leaders, then takes over late.",
+        "late" => "Late Surger: waits mid-pack and moves up late in the race.",
+        "end" => "End Closer: stays at the back and sprints past everyone at the end.",
+        "mlb" => "MLB: max limit break (LB4), a support card at full strength. Merging copies of a card raises it; a friend's card you borrow is often MLB.",
+        "vet" => "The number is the game's id for one finished uma (its Veteran List entry), so you can tell two of the same uma apart.",
         _ => "",
     }
+}
+
+/// The running styles a text names, as the hover that explains them (one line each).
+pub(crate) fn style_hint(text: &str) -> Option<String> {
+    let lines: Vec<&str> = [("Front Runner", "front"), ("Pace Chaser", "pace"), ("Late Surger", "late"), ("End Closer", "end")].iter().filter(|(name, _)| text.contains(name)).map(|(_, k)| meaning(k)).collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// What a term means, for a hover outside this file ("mlb", "vet").
+pub(crate) fn explain(term: &str) -> &'static str {
+    meaning(term)
 }
 
 /// A piece of rich text: its words, weight, colour, and the term it explains, if any.
@@ -61,10 +78,9 @@ pub(crate) fn rich(ui: &mut egui::Ui, spans: &[Span], size: f32, max_w: f32) {
     let mut at = 0usize;
     for s in spans {
         let font = if s.bold { FontId::new(size, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())) } else { FontId::proportional(size) };
-        let mut fmt = egui::TextFormat { font_id: font, color: s.color.unwrap_or(p.text), line_height: Some(size * 1.5), ..Default::default() };
-        if s.term.is_some() {
-            fmt.underline = Stroke::new(1.0, p.weak);
-        }
+        // Bold words also take the strong text colour, so they stand out whatever the font's weights.
+        let ink = s.color.unwrap_or(if s.bold { ui.visuals().strong_text_color() } else { p.text });
+        let fmt = egui::TextFormat { font_id: font, color: ink, line_height: Some(size * 1.5), ..Default::default() };
         job.append(&s.text, 0.0, fmt);
         let n = s.text.chars().count();
         if let Some(t) = s.term {
@@ -75,6 +91,28 @@ pub(crate) fn rich(ui: &mut egui::Ui, spans: &[Span], size: f32, max_w: f32) {
     let galley = ui.painter().layout_job(job);
     let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::hover());
     ui.painter().galley(rect.min, galley.clone(), p.text);
+    // Each term gets a dotted underline under its own characters, row by row (egui's underline
+    // lands on the wrong row once the line height is raised).
+    for (a, b, _) in &terms {
+        let mut runs: Vec<(f32, f32, f32)> = Vec::new();
+        for i in *a..*b {
+            let r = galley.pos_from_cursor(egui::text::CCursor { index: egui::text::CharIndex(i), prefer_next_row: true });
+            let next = galley.pos_from_cursor(egui::text::CCursor::new(i + 1));
+            let right = if (next.bottom() - r.bottom()).abs() < 1.0 { next.left() } else { r.left() + size * 0.5 };
+            match runs.last_mut() {
+                Some(run) if (run.2 - r.bottom()).abs() < 1.0 => run.1 = right,
+                _ => runs.push((r.left(), right, r.bottom())),
+            }
+        }
+        for (x0, x1, y) in runs {
+            let y = rect.top() + y - size * 0.18;
+            let mut x = rect.left() + x0;
+            while x < rect.left() + x1 {
+                ui.painter().line_segment([pos2(x, y), pos2((x + 2.0).min(rect.left() + x1), y)], Stroke::new(1.0, p.weak));
+                x += 4.0;
+            }
+        }
+    }
     if let Some(pos) = resp.hover_pos() {
         let i = galley.cursor_from_pos(pos - rect.min).index.0;
         if let Some((_, _, t)) = terms.iter().find(|(a, b, _)| i >= *a && i < *b) {
@@ -305,7 +343,10 @@ impl App {
                         ui.allocate_ui_with_layout(vec2(flex, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.set_width(flex);
                             let why = if c.what_for.is_empty() { c.label.clone() } else { c.what_for.clone() };
-                            ui.add(egui::Label::new(RichText::new(why).size(13.5)).wrap());
+                            let r = ui.add(egui::Label::new(RichText::new(&why).size(13.5)).wrap());
+                            if let Some(h) = style_hint(&why) {
+                                r.on_hover_text(h);
+                            }
                             match &c.done {
                                 Some(d) => {
                                     let mut spans = vec![Span::t(&format!("Marked done {} ", when(&d.at)))];
@@ -403,7 +444,7 @@ impl App {
                 if c.own {
                     ui.label(semibold(crate::parentage::short_name(&self.kb, c.brief.trainee), 13.0));
                     if let (Some(v), Some(t)) = (team.runners.iter().find(|r| r.trainee == c.brief.trainee).and_then(|r| r.vs_today), team.today.first()) {
-                        ui.label(RichText::new(format!("beats #{} in {:.0}%", t.vet, v * 100.0)).size(12.5).color(p.weak));
+                        ui.label(RichText::new(format!("beats #{} in {:.0}%", t.vet, v * 100.0)).size(12.5).color(p.weak)).on_hover_text(format!("#{} {} is your best finished uma for this course as she races now. {}", t.vet, crate::parentage::short_name(&self.kb, t.outfit), meaning("vet")));
                     }
                 } else if let Some(r) = c.brief.for_runner {
                     ui.horizontal(|ui| {
@@ -541,7 +582,7 @@ impl App {
                         crate::ui_util::pill_padded(ui, RichText::new(tag).size(11.5).color(ink), fill, Stroke::NONE, vec2(8.0, 2.0));
                         if let Some(r) = results.get(k).filter(|r| !r.is_empty()) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                ui.label(RichText::new(r).size(12.5).color(p.weak));
+                                ui.label(RichText::new(r).size(12.5).color(p.weak)).on_hover_text(meaning("vet"));
                             });
                         }
                     });
