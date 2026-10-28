@@ -289,7 +289,9 @@ mod tests {
     #[test]
     fn plan_markdown_round_trips() {
         let mut a = app();
-        a.planner.demo(&a.roster, &a.kb, 101601);
+        if let Some(u) = a.roster.umas.first().map(|u| u.id) {
+            a.planner.demo(&a.roster, &a.kb, if a.roster.umas.iter().any(|x| x.id == 101601) { 101601 } else { u });
+        }
         a.planner.plan.title = "Test plan".into();
         let md = a.plan_markdown(None);
         for section in ["## Goal", "## Trainee", "## Deck", "## Skills to buy", "## Simulation", "## Recommendation"] {
@@ -362,7 +364,15 @@ mod tests {
     #[ignore]
     fn frame_times() {
         let t0 = std::time::Instant::now();
-        let mut a = app();
+        // UMALORD_ROOT=<account folder> times the pages on a real account.
+        let mut a = match std::env::var("UMALORD_ROOT") {
+            Ok(r) => {
+                let mut a = App::new(Some(std::path::PathBuf::from(r)));
+                a.onboarding.open = false;
+                a
+            }
+            Err(_) => app(),
+        };
         eprintln!("App::new {:>7.1} ms", t0.elapsed().as_secs_f64() * 1e3);
         let ctx = egui::Context::default();
         theme::install(&ctx, theme::Mode::Dark);
@@ -399,6 +409,40 @@ mod tests {
             let steady = times[1..].iter().sum::<f64>() / (times.len() - 1) as f64;
             let name = sub.map(|s| format!("{s:?}")).or(career.map(|c| format!("{c:?}"))).unwrap_or(format!("{tab:?}"));
             eprintln!("{name:<10} first {:>7.1} ms · then {:>6.2} ms/frame", times[0], steady);
+        }
+        // Lineage: each view's team builds on a worker; wait for it, then time steady frames.
+        a.tab = Tab::Lineage;
+        for view in [lineage_page::LineageView::Cm, lineage_page::LineageView::Tt, lineage_page::LineageView::Runner] {
+            a.lineage.view = view;
+            let start = std::time::Instant::now();
+            let mut first = 0.0;
+            for k in 0..6000 {
+                let t = std::time::Instant::now();
+                let _ = crate::ui_util::test_frame(&ctx, input(), |ui| a.frame(ui));
+                if k == 0 {
+                    first = t.elapsed().as_secs_f64() * 1e3;
+                }
+                if !a.lineage_busy(f64::INFINITY) && a.lineage.job.is_none() && k > 2 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let built = start.elapsed().as_secs_f64();
+            let failed = match view {
+                lineage_page::LineageView::Cm => a.lineage.cm_built.as_ref().and_then(|r| r.as_ref().err()).cloned(),
+                lineage_page::LineageView::Tt => a.lineage.tt_built.as_ref().and_then(|r| r.as_ref().err()).cloned(),
+                lineage_page::LineageView::Runner => None,
+            };
+            if let Some(e) = failed {
+                eprintln!("  ({view:?} didn't build here: {e}; set UMALORD_ROOT to an account to time a real team)");
+            }
+            let mut times = Vec::new();
+            for _ in 0..6 {
+                let t = std::time::Instant::now();
+                let _ = crate::ui_util::test_frame(&ctx, input(), |ui| a.frame(ui));
+                times.push(t.elapsed().as_secs_f64() * 1e3);
+            }
+            eprintln!("Lineage {view:<6?} first {first:>7.1} ms · built in {built:>5.1} s · then {:>6.2} ms/frame", times.iter().sum::<f64>() / times.len() as f64);
         }
         a.planner.plan.target[0] += 10;
         let t = std::time::Instant::now();
