@@ -6,6 +6,15 @@ What changed in each release. Releases are built from the tagged source by GitHu
 
 ### Added
 
+- **Lineage, a new tab, answers "what career should I run next, and how?"** for a Champions Meeting team, a Team Trials team or one runner. Its Next career card names who to train and why, then gives:
+  - the parents, scenario, deck with a borrowed MLB friend card, and skills
+  - how to run it: Independent Training for parent careers, with a setup panel to copy into the game (training focus, up to 10 prioritized skills to tick off, and the race agenda with each race's win chance); a manual career for runners
+  - what to keep her for, as spark chips drawn like the game's, and the odds
+- **Teams are compared with what you can field today:** your finished umas as they are, raced in the simulator. Champions Meeting shows each runner's head-to-head share against today's best. Team Trials puts today and the plan side by side for each race, with the gain.
+- **One runner's parent plan is tracked step by step.** If a step won't come, the Stuck panel offers to settle with the closest uma, try another route, or keep going. Each choice is previewed first and can be undone.
+- **The layout suits any window:** two panes at 1200 px and wider (the card beside the overview, each scrolling on its own), one column below. Small text keeps 4.5:1 contrast in both themes.
+- **Game data refreshes every week:** new umas and cards, with their art, arrive without a new release. The pack is built and tested by GitHub Actions; the app downloads only the files that changed, and checks each one.
+- **Every uma and card has its picture:** the 90 cards that were missing art now ship with it, and anything new downloads in the background.
 - The Ask tab's Claude backend can run on your Claude account: with Claude Code installed, questions go through it, signed in with its own login, a setup token from `claude setup-token`, or an API key. It runs isolated from your Claude Code settings, keeps one process per conversation so follow-ups start at once, and streams the answer.
 - Builds and runs on Linux (Wayland) and macOS from source, tested in CI on all three. Settings live in the platform's own folder, times show in your local time zone, and the Ask tab uses `opencode` from your PATH.
 - The app bundles small symbol fonts, so every icon draws whatever fonts the system has.
@@ -16,6 +25,8 @@ What changed in each release. Releases are built from the tagged source by GitHu
 
 ### Fixed
 
+- **Parent careers recommended skills the runner couldn't use.** A parent's skills become her runner's white sparks, and 56% of the picks were tied to another style, distance or racecourse. Now every pick fits the runner, and tests check every brief.
+- **Parent plans could cost more careers than they needed.** A route where the second career only has to finish was considered only when nothing else fitted, and re-planning could swap your next step for a costlier one. Predictions now match play-throughs within a few percent.
 - Twelve second and third outfits (Grass Wonder [Saintly Jade Cleric], Oguri Cap [Ashen Miracle], Maruzensky [Hot☆Summer Night] and others) showed their first outfit's unique skill; each now has its own, matching the game's spark table.
 - On Linux, Downloads and Pictures follow the desktop's own folders (`~/.config/user-dirs.dirs`).
 - The planner's Upcoming CM legend puts ✔ announced and ? estimated on their own lines instead of wrapping mid-phrase.

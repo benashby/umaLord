@@ -136,6 +136,20 @@ the steps to plan a career, and the game words the app uses.
       Copy summary / Save chart as PNG / Save to plan.
 - Career > Results: log careers, Team Trials, Champions Meeting, League of Heroes and
   sparks.
+- Lineage: your next career, and why. Three views:
+  - Champions Meeting: three runners for the next CM, each against what you can field
+    today (your finished umas as they are, raced in the simulator), and the parent careers
+    they need.
+  - Team Trials: the five races, with today's runners, the plan and the gain for each.
+  - One runner: one runner's parent plan, step by step. Past the point where 9 in 10
+    players would have finished a step, the Stuck panel offers to settle with your closest
+    uma, try another route, or keep going. Each choice is previewed first, and Undo takes
+    it back.
+  Each view starts with the Next career card: who to train and why, the parents, scenario,
+  deck and skills, and how to run it. Parent careers use Independent Training: copy the
+  setup panel into the game and tick the skills as you enter them (the ticks are saved).
+  Runners are manual careers. "Start this career" fills in Career > Plan. On a wide window
+  the card sits beside the overview, and each side scrolls on its own.
 - Notes and files: read the notes, plans and logs. It isn't a tab any more: open it from
   Settings > Data and updates ("Browse notes and data files").
 - Long dropdowns (trainees, courses, skills, models) have a search box: type to filter,
@@ -248,8 +262,9 @@ Python 3, then run this from the umaLord folder:
 
 To refresh only the community meta sheet (it changes most often), add "--only meta".
 
-New umas also need their pictures in app\assets (cards added with "+ Add cards" get
-theirs automatically). Without one, the app shows a coloured box instead.
+The game data also refreshes itself each week: a data pack, built and tested from uma.guide,
+brings new umas, cards and their pictures. Only the files that changed download. Check it
+or run it now in Settings > Data and updates > Weekly pack.
 
 
 Using it with Claude Code (optional)
