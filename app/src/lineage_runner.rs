@@ -154,7 +154,12 @@ impl App {
                 this.step_list(ui, &plan);
                 ui.add_space(12.0);
                 crate::ui_util::card(ui, |ui| {
-                    ui.label(semibold("History", 15.0));
+                    ui.horizontal(|ui| {
+                        ui.label(semibold("History", 15.0));
+                        if plan.before.is_some() && ui.small_button("↶ Undo the last change").clicked() {
+                            this.runner_do(|plan, _, _, _, today| plan.undo(today));
+                        }
+                    });
                     for l in plan.log.iter().rev().take(8) {
                         ui.add(egui::Label::new(RichText::new(l).size(12.5).color(p.weak)).wrap());
                     }
@@ -313,7 +318,7 @@ impl App {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 crate::lineage_kit::odds_dots(ui, run.p, p.accent, p.border);
-                ui.label(RichText::new(format!("{} a career ({:.1}%); usually {typical}.", crate::parentage::verify::one_in(run.p), run.p * 100.0)).size(13.0));
+                ui.label(RichText::new(format!("{} a career ({:.1}%). With the spark reroll, usually {typical}; 1 in 10 need {unlucky} or more.", crate::parentage::verify::one_in(run.p), run.p * 100.0)).size(13.0));
             });
             // The careers run so far as dots, a ring at the 9-in-10 mark.
             ui.horizontal(|ui| {
@@ -394,6 +399,26 @@ impl App {
                     ui.label(RichText::new("No steps left after this: her lineage would be ready.").size(12.5));
                 }
                 ui.add(egui::Label::new(RichText::new(&msg).size(12.5).color(p.weak)).wrap());
+                // The steps left, before and after, side by side.
+                let steps_list = |this: &Self, ui: &mut egui::Ui, title: &str, steps: &[Run]| {
+                    ui.label(RichText::new(title).size(12.0).strong().color(p.weak));
+                    if steps.is_empty() {
+                        ui.label(RichText::new("none: her lineage is ready").size(12.5));
+                    }
+                    for r in steps {
+                        ui.horizontal_wrapped(|ui| {
+                            this.avatar(ui, r.trainee, 20.0);
+                            ui.label(RichText::new(crate::parentage::uma_name(&this.kb, r.trainee)).size(12.5));
+                            let (typical, _) = crate::parentage::verify::step_spread(r.p);
+                            ui.label(RichText::new(format!("usually {typical}")).size(12.0).color(p.weak));
+                        });
+                    }
+                };
+                let old_steps = plan.remaining();
+                ui.columns(2, |c| {
+                    c[0].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| steps_list(self, ui, "BEFORE", &old_steps));
+                    c[1].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| steps_list(self, ui, "AFTER", &after));
+                });
                 let saving = before - now;
                 ui.label(RichText::new(if saving.abs() < 0.5 { format!("No faster: about {before:.0} careers left either way, with a fresh chance of luck.") } else if saving > 0.0 { format!("Careers left: about {before:.0} → about {now:.0} ({saving:.0} fewer).") } else { format!("Careers left: about {before:.0} → about {now:.0} ({:.0} more).", -saving) }).size(13.0));
                 ui.label(RichText::new("Nothing changes until you press the button.").size(12.0).color(p.weak));
@@ -427,29 +452,43 @@ impl App {
                         this.lineage.runner.settle_costs.insert((i, h.id), left);
                     }
                 }
-                let now_left: f64 = plan.remaining().iter().map(Run::careers).sum();
                 for h in closest.iter().take(3) {
-                    ui.horizontal_wrapped(|ui| {
-                        this.avatar(ui, run.trainee, 24.0);
-                        ui.label(RichText::new(format!("#{}", h.id)).size(13.0));
-                        let note = if h.must { "has the must-haves".to_string() } else { format!("{} star{} short", h.short, if h.short == 1 { "" } else { "s" }) };
-                        ui.label(RichText::new(note).size(12.5).color(if h.must { p.good } else { crate::lineage_kit::ink(p.warn, p.surface) }));
-                        if !h.same_parents {
-                            ui.label(RichText::new("other legacies").size(12.0).color(p.weak));
-                        }
-                        if let Some(left) = this.lineage.runner.settle_costs.get(&(i, h.id)).filter(|l| l.is_finite()) {
-                            let d = left - (now_left - run.careers());
-                            let txt = if left.abs() < 0.5 { "then her lineage is ready".to_string() } else if d.abs() < 0.5 { format!("about {left:.0} careers left after") } else { format!("about {left:.0} careers left after ({}{:.0} vs. finishing the step)", if d > 0.0 { "+" } else { "" }, d) };
-                            ui.label(RichText::new(txt).size(12.0).color(p.weak));
-                        }
-                        if ui.small_button("Preview").clicked() {
-                            let inv = this.parent_inventory();
-                            match plan.preview_settle(&this.kb, &inv, vets, h.id, &crate::ui_util::today()) {
-                                Ok((after, msg)) => this.lineage.runner.preview = Some((Pending::Settle(h.id), after, msg)),
-                                Err(e) => this.lineage.runner.message = Some(e),
+                    let own = vets.iter().find(|v| v.trained_chara_id == h.id).map(|v| v.factors()).unwrap_or_default();
+                    egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal_wrapped(|ui| {
+                            this.avatar(ui, run.trainee, 24.0);
+                            ui.label(semibold(format!("#{} {}", h.id, uma_name(&this.kb, run.trainee)), 13.0));
+                        });
+                        // Her sparks against the must-haves: filled what she has, targets for the
+                        // rest, red where she's short.
+                        ui.horizontal_wrapped(|ui| {
+                            for w in &run.must {
+                                let (kind, name, wanted) = w.chip(&this.kb);
+                                let short = w.short(&own);
+                                let have = wanted.saturating_sub(short);
+                                crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::of(kind), &name, have, Some(wanted), short > 0, true);
+                                if short > 0 {
+                                    ui.add(egui::Label::new(RichText::new(format!("{name} {have}★, wanted {wanted}★")).size(12.0).color(crate::lineage_kit::ink(p.warn, p.surface))).wrap_mode(egui::TextWrapMode::Extend));
+                                }
                             }
-                        }
+                        });
+                        ui.label(RichText::new(if h.same_parents { "✔ ran with the step's legacies" } else { "✖ ran with other legacies" }).size(12.0).color(p.weak));
+                        ui.horizontal_wrapped(|ui| {
+                            if let Some(left) = this.lineage.runner.settle_costs.get(&(i, h.id)).filter(|l| l.is_finite()) {
+                                let txt = if left.abs() < 0.5 { "Keep her: then her lineage is ready".to_string() } else { format!("Keep #{}: about {left:.0} careers left after", h.id) };
+                                ui.label(RichText::new(txt).size(12.5));
+                            }
+                            if ui.small_button("Preview").clicked() {
+                                let inv = this.parent_inventory();
+                                match plan.preview_settle(&this.kb, &inv, vets, h.id, &crate::ui_util::today()) {
+                                    Ok((after, msg)) => this.lineage.runner.preview = Some((Pending::Settle(h.id), after, msg)),
+                                    Err(e) => this.lineage.runner.message = Some(e),
+                                }
+                            }
+                        });
                     });
+                    ui.add_space(4.0);
                 }
             };
             let route_ui = |this: &mut Self, ui: &mut egui::Ui| {
