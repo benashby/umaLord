@@ -1,6 +1,6 @@
-//! The Lineage page's drawn pieces: spark chips drawn like the game's (Claude Design round 8,
-//! colours sampled from the game's own chips; round 9 centred the stars and made wanted stars
-//! clearer) and the odds strip.
+//! The Lineage page's drawn pieces: spark chips drawn like the game's (colours sampled from the
+//! game's own chips; stars centred below, wanted stars as hollow targets), the odds strip, and
+//! contrast-safe text colours.
 
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 
@@ -180,7 +180,7 @@ pub fn segmented(ui: &mut egui::Ui, options: &[&str], picked: &str, accent: Colo
 
 /// `color` as small text on `bg`, adjusted until it reaches WCAG's 4.5:1 (darker on light
 /// backgrounds, lighter on dark ones), so tinted pills and raised panels stay legible in both
-/// themes (LINEAGE-LAYOUT-DECISIONS.md, decision 6).
+/// themes (WCAG 2.2, 1.4.3).
 pub fn ink(color: Color32, bg: Color32) -> Color32 {
     let light_bg = crate::theme::contrast(bg, Color32::BLACK) > crate::theme::contrast(bg, Color32::WHITE);
     let mut c = color;

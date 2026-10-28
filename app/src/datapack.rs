@@ -13,8 +13,9 @@ use std::sync::mpsc::{Receiver, channel};
 
 /// The pack format this app reads (`SCHEMA` in tools/make_data_pack.py).
 pub const SCHEMA: u32 = 1;
-/// Where the pack is published; `data_pack_url` in settings.json overrides it.
-pub const URL: &str = "https://github.com/benashby/umaLord/releases/download/data-pack";
+/// Where the pack is published: the repository the app is built from (Cargo.toml's
+/// `repository`). `data_pack_url` in settings.json overrides it, e.g. for a fork.
+pub const URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases/download/data-pack");
 /// Days between checks.
 pub const EVERY_DAYS: i64 = 7;
 

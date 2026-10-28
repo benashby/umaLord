@@ -1,7 +1,7 @@
 //! The Lineage page's One runner view: one runner's parent plan (`plans/parents.json`), step by
 //! step. The current step's Next career card and its progress against the odds come first; past
 //! the step's bad-luck mark the Stuck panel opens (settle with the closest uma, try another
-//! route, or keep going), each choice previewed before it changes anything (round 8, section 3).
+//! route, or keep going), each choice previewed before it changes anything.
 //! The step list, the plan's choices (pins and steps set aside) and its history fill the
 //! overview pane.
 
@@ -498,7 +498,7 @@ impl App {
     }
 
     /// What a friend's legacy must carry for the runner to start at A today, and a form to add
-    /// the one the player finds (round 4's "What to look for" card and Add a borrowed parent).
+    /// the one the player finds.
     fn look_for_legacy(&mut self, ui: &mut egui::Ui, plan: &ParentPlan) {
         let p = pal(ui);
         let inv = plan.inventory(&self.kb, &self.parent_inventory());

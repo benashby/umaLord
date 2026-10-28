@@ -2,8 +2,7 @@
 //! team, a Team Trials team, or one runner. The planner (`parentage/`) does the work on a
 //! worker thread with its own copy of the app's data (`agent::mcp::headless_app`), since a team
 //! takes seconds to race; the page shows the Next career card first, then today's team, the
-//! planned runners and the parent queue. The design is Claude Design rounds 3 to 9
-//! (`DESIGN-ROUND*.md` in the umaLord notes); the art and spark chips follow round 8.
+//! planned runners and the parent queue.
 
 use crate::App;
 use crate::parentage::brief::Brief;
@@ -14,7 +13,7 @@ use crate::ui_util::semibold;
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
 use std::sync::mpsc::{Receiver, channel};
 
-/// The two-pane breakpoint, the action pane's width and the gap (LINEAGE-LAYOUT-DECISIONS.md).
+/// The two-pane breakpoint, the action pane's width and the gap (see `panes`).
 const WIDE: f32 = 1200.0;
 const ACTION_W: f32 = 480.0;
 const PANE_GAP: f32 = 24.0;
@@ -158,7 +157,7 @@ impl App {
         self.lineage.job.is_some() || self.lineage.done_at.is_some_and(|t| now - t < 0.5)
     }
 
-    /// The page's two layouts, chosen once from the page's width (LINEAGE-LAYOUT-DECISIONS.md):
+    /// The page's two layouts, chosen once from the page's width:
     /// at 1200 px and wider, a fixed 480 px action pane (the Next career card) beside the
     /// overview, each scrolling on its own so the setup stays in view; narrower, one column,
     /// the card first.
@@ -511,7 +510,7 @@ impl App {
         });
     }
 
-    /// The Next career card (round 8's 8a): who and why with Start this career; How (Independent
+    /// The Next career card: who and why with Start this career; How (Independent
     /// Training with its setup panel, or a manual career); then parents, scenario, deck and
     /// skills beside stats, races and keep-if; the odds strip last.
     pub(crate) fn next_card(&mut self, ui: &mut egui::Ui, b: &Brief) {
@@ -615,7 +614,7 @@ impl App {
                             this.card_art(ui, f, art, true);
                         }
                     });
-                    // The borrowed card: what it is, and what to take instead (round 4). The
+                    // The borrowed card: what it is, and what to take instead. The
                     // ranking's reasons are dense, so they're on hover.
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
                         let line = ui.add(egui::Label::new(RichText::new(format!("Borrow from a friend: {} [{}], fully limit broken (MLB).", f.uma, f.title)).size(12.5)).wrap());
@@ -690,7 +689,7 @@ impl App {
                 left(self, ui);
                 right(self, ui);
             }
-            // How races work, for when it's needed: collapsed, remembered (decision 4).
+            // How races work, for when it's needed: collapsed, remembered.
             ui.separator();
             remembered_section(ui, "races_help", "How races work in this career", false, |ui| {
                 ui.set_max_width(640.0);
@@ -727,7 +726,7 @@ impl App {
                 ui.label(RichText::new("Same order as the game's screen: copy it across, top to bottom.").size(12.0).color(p.weak));
             });
             ui.add_space(6.0);
-            // Ticks last through the 50-minute run and app restarts, per plan (decision 7).
+            // Ticks last through the 50-minute run and app restarts, per plan.
             let plan_key = format!("{}:{:?}", b.trainee, &b.skills[..b.skills.len().min(10)]);
             let mut all: std::collections::BTreeMap<String, Vec<bool>> = crate::collection_kit::setting(ui.ctx(), "lineage_ticks");
             let mut ticks: Vec<bool> = all.get(&plan_key).cloned().filter(|t| t.len() == b.skills.len().min(10)).unwrap_or_else(|| vec![false; b.skills.len().min(10)]);
@@ -918,7 +917,7 @@ fn queue_row(app: &App, inv: &crate::parentage::Inventory, runner: u32, run: &cr
 }
 
 /// A section that opens and closes, remembered across launches in settings.json
-/// (`lineage_open`), since eframe's persistence is off (decision 13).
+/// (`lineage_open`), since eframe's persistence is off.
 fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: bool, body: impl FnOnce(&mut egui::Ui)) {
     use egui::collapsing_header::{CollapsingState, paint_default_icon};
     let saved: std::collections::BTreeMap<String, bool> = crate::collection_kit::setting(ui.ctx(), "lineage_open");
