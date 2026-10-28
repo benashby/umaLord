@@ -46,6 +46,14 @@ pub struct Brief {
     /// A runner's own Independent Training runs the player marked: (reached the stamina floor,
     /// marked). None until there's one; no guess stands in for it.
     pub it_floor: Option<(u32, u32)>,
+    /// For the page: the step's must-haves and nice-to-haves as sparks, her two legacies (id and
+    /// outfit; none for a starter step or a runner), one career's chance of the must-haves, and
+    /// Independent Training's training focus.
+    pub must: Vec<super::jobs::Want>,
+    pub nice: Vec<super::jobs::Want>,
+    pub legacies: Vec<(u64, u32)>,
+    pub p: Option<f64>,
+    pub focus: Option<String>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -205,6 +213,11 @@ impl App {
             setup,
             agenda,
             it_floor: None,
+            must: run.must.clone(),
+            nice: run.nice.clone(),
+            legacies: if run.legacies == [0, 0] { Vec::new() } else { run.legacies.iter().zip(run.legacy_umas).map(|(id, uma)| (*id, if uma == 0 { inv.by_id(*id).map_or(0, |p| p.uma) } else { uma })).collect() },
+            p: Some(run.p),
+            focus: Some(if run.stat_aims.contains(&1) { "Stamina" } else { "Balanced" }.to_string()),
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -248,6 +261,11 @@ impl App {
         Brief {
             agenda: Vec::new(),
             it_floor,
+            must: Vec::new(),
+            nice: Vec::new(),
+            legacies: Vec::new(),
+            p: None,
+            focus: Some(focus(plan.target[1]).to_string()),
             mode: "Manual career".into(),
             setup,
             why,

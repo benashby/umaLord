@@ -20,6 +20,7 @@ mod digest;
 mod home;
 mod knowledge;
 mod lineage;
+mod lineage_kit;
 mod lineage_page;
 mod live;
 mod meta;

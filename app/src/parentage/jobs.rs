@@ -37,6 +37,15 @@ impl Want {
         }
     }
 
+    /// As a spark chip shows it: its colour (0 blue, 1 pink, 2 green), its name, and the stars wanted.
+    pub fn chip(&self, kb: &Knowledge) -> (u8, String, u8) {
+        match self {
+            Want::Pink { aptitude, stars } => (1, APTITUDES[*aptitude].to_string(), *stars),
+            Want::Blue { stat, stars } => (0, STATS[*stat].to_string(), *stars),
+            Want::Green { uma, stars } => (2, kb.sparks.get(&green_spark(*uma, 1)).map_or_else(|| super::uma_name(kb, *uma), |s| s.name.clone()), *stars),
+        }
+    }
+
     /// One career's chance of it, where it doesn't hang on which aptitude a pink lands on: a blue
     /// by how this account's careers finish the stat, a green by its usual rank.
     pub fn odds(&self, h: &super::outcome::History) -> Option<f64> {
