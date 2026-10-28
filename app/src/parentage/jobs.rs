@@ -82,6 +82,22 @@ impl Run {
     }
 }
 
+/// A choice the player made that the plan must keep: the first step's trainee, one of her two
+/// parents, or the finished uma the runner pairs with. The rest is planned around it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Pin {
+    pub trainee: Option<u32>,
+    pub legacy: Option<u64>,
+    pub partner: Option<u64>,
+}
+
+impl Pin {
+    pub fn is_empty(&self) -> bool {
+        *self == Pin::default()
+    }
+}
+
 /// The planner's answer for a goal.
 #[derive(Clone, Debug, Default)]
 pub struct Proposal {
@@ -141,6 +157,11 @@ impl Cand {
 
 /// Plan the steps for a goal.
 pub fn propose(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Proposal {
+    propose_pinned(kb, goal, inv, &Pin::default())
+}
+
+/// Plan the steps for a goal, keeping the player's pinned choice.
+pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -> Proposal {
     let need = match goal.need(kb) {
         Ok(n) => n,
         Err(impossible) => return Proposal { impossible, ..Default::default() },
@@ -150,7 +171,10 @@ pub fn propose(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Proposal {
     if now.as_ref().is_some_and(Lineage::meets) {
         return out;
     }
-    let partners = Partners::new(goal, &need, &inv.parents);
+    let partners = Partners::new(goal, &need, &inv.parents, pin.partner);
+    let pinned = |c: &Cand| pin.trainee.is_none_or(|t| c.trainee == t) && pin.legacy.is_none_or(|id| c.legacies.iter().any(|i| inv.parents[*i].id == id));
+    // Two-step candidates that keep the pin (one of the two steps must).
+    let mut two_pinned: ByJob = BTreeMap::new();
     // The best one-step route (with its partner's chara constraint checked), per trainee.
     let mut one: BTreeMap<u32, Cand> = BTreeMap::new();
     // The best careers per (pink, stars brought, green): candidates for two-step routes.
@@ -158,24 +182,19 @@ pub fn propose(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Proposal {
     for_each_cand(kb, goal, inv, &need, |c| {
         let green_needed = goal.green.is_some() && !c.green;
         let req: Vec<u32> = need.iter().zip(&c.brings).map(|((_, n), b)| n.saturating_sub(*b)).collect();
-        if partners.exists(&req, green_needed, chara(c.trainee)) && one.get(&c.trainee).is_none_or(|o| c.better(o)) {
+        let ok = pinned(c);
+        if ok && partners.exists(&req, green_needed, chara(c.trainee)) && one.get(&c.trainee).is_none_or(|o| c.better(o)) {
             one.insert(c.trainee, c.clone());
         }
-        let list = two.entry((c.pink, c.brings.clone(), c.green)).or_default();
-        // Keep the three best with different trainees, so two steps can always differ.
-        if let Some(i) = list.iter().position(|o| chara(o.trainee) == chara(c.trainee)) {
-            if c.better(&list[i]) {
-                list[i] = c.clone();
-            }
-        } else {
-            list.push(c.clone());
+        keep_best(&mut two, c);
+        if ok {
+            keep_best(&mut two_pinned, c);
         }
-        list.sort_by(|a, b| a.careers().total_cmp(&b.careers()).then(b.tie.cmp(&a.tie)));
-        list.truncate(3);
     });
     let mut singles: Vec<Cand> = one.into_values().collect();
     singles.sort_by(|a, b| a.careers().total_cmp(&b.careers()).then(b.tie.cmp(&a.tie)));
-    let pair = best_pair(goal, &need, &two);
+    // A pinned partner is a finished uma, so it rules out two new parents.
+    let pair = if pin.partner.is_some() { None } else if pin.is_empty() { best_pair(goal, &need, &two, &two) } else { best_pair(goal, &need, &two_pinned, &two) };
     let fits = |c: &f64| *c <= CAP;
     let single = singles.first().filter(|c| fits(&c.careers()));
     let double = pair.as_ref().filter(|(a, b)| fits(&a.careers()) && fits(&b.careers()));
@@ -224,6 +243,20 @@ pub fn propose(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Proposal {
     let chosen: Vec<u32> = out.steps.iter().map(|s| s.trainee).collect();
     out.alternatives = singles.iter().filter(|c| !chosen.contains(&c.trainee) && fits(&c.careers())).take(3).map(|c| to_run(kb, goal, inv, c).0).collect();
     out
+}
+
+/// Keep the three best candidates per key, with different trainees, so two steps can always differ.
+fn keep_best(map: &mut ByJob, c: &Cand) {
+    let list = map.entry((c.pink, c.brings.clone(), c.green)).or_default();
+    if let Some(i) = list.iter().position(|o| chara(o.trainee) == chara(c.trainee)) {
+        if c.better(&list[i]) {
+            list[i] = c.clone();
+        }
+    } else {
+        list.push(c.clone());
+    }
+    list.sort_by(|a, b| a.careers().total_cmp(&b.careers()).then(b.tie.cmp(&a.tie)));
+    list.truncate(3);
 }
 
 /// Every useful parent career: each owned trainee (not the runner's character) with each pair
@@ -283,12 +316,14 @@ fn for_each_cand(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u
 /// avoid the step's trainee).
 struct Partners {
     groups: Vec<Group>,
+    /// The pinned partner, the only one allowed.
+    only: Option<u64>,
 }
 
 impl Partners {
-    fn new(goal: &Goal, need: &[(usize, u32)], parents: &[Parent]) -> Self {
+    fn new(goal: &Goal, need: &[(usize, u32)], parents: &[Parent], only: Option<u64>) -> Self {
         let mut groups: Vec<Group> = Vec::new();
-        for (i, p) in parents.iter().enumerate().filter(|(_, p)| goal.allows(p)) {
+        for (i, p) in parents.iter().enumerate().filter(|(_, p)| goal.allows(p) && only.is_none_or(|id| p.id == id)) {
             let v: Vec<u32> = need.iter().map(|(j, _)| u32::from(p.pink_line[*j])).collect();
             let g = goal.green.is_some_and(|w| p.green.is_some_and(|(u, _)| u == w));
             let at = match groups.iter().position(|x| x.0 == v && x.1 == g) {
@@ -303,7 +338,7 @@ impl Partners {
                 charas.push((p.chara(), i));
             }
         }
-        Partners { groups }
+        Partners { groups, only }
     }
 
     fn exists(&self, req: &[u32], green: bool, avoid: u32) -> bool {
@@ -317,7 +352,7 @@ impl Partners {
             pairable(goal, product, p) && (!green || goal.green.is_some_and(|w| p.green.is_some_and(|(u, _)| u == w))) && need.iter().zip(req).all(|((j, _), r)| u32::from(p.pink_line[*j]) >= *r)
         };
         let mut best: Option<(f64, u32, usize)> = None;
-        for (i, p) in inv.parents.iter().enumerate().filter(|(_, p)| ok(p)) {
+        for (i, p) in inv.parents.iter().enumerate().filter(|(_, p)| ok(p) && self.only.is_none_or(|id| p.id == id)) {
             let l = score(kb, goal, &[product.clone(), p.clone()], [0, 1]);
             if best.is_none_or(|(f, a, _)| (l.fit, l.affinity) > (f, a)) {
                 best = Some((l.fit, l.affinity, i));
@@ -329,11 +364,10 @@ impl Partners {
 
 /// The cheapest two steps that together meet every target (and the wanted green), with
 /// different trainees.
-fn best_pair(goal: &Goal, need: &[(usize, u32)], two: &ByJob) -> Option<(Cand, Cand)> {
-    let keys: Vec<_> = two.iter().collect();
+fn best_pair(goal: &Goal, need: &[(usize, u32)], left: &ByJob, right: &ByJob) -> Option<(Cand, Cand)> {
     let mut best: Option<(f64, Cand, Cand)> = None;
-    for (x, (kx, cx)) in keys.iter().enumerate() {
-        for (ky, cy) in &keys[x..] {
+    for (kx, cx) in left.iter() {
+        for (ky, cy) in right.iter() {
             if goal.green.is_some() && !kx.2 && !ky.2 {
                 continue;
             }

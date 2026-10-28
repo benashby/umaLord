@@ -403,8 +403,16 @@ impl App {
         if vets.len() < before {
             msg += &format!(" That's fewer than before: the last import is kept in {}/backups/.", crate::profile::DIR);
         }
-        if let Some(note) = crate::parentage::track::load(&root).and_then(|plan| crate::parentage::text::import_note(&self.kb, &plan, &vets)) {
-            msg += &format!(" {note}");
+        // The parent plan: confirm steps checked off by hand, then say if a new uma meets the step.
+        if let Some(mut plan) = crate::parentage::track::load(&root).filter(|p| !p.paused) {
+            let notes = plan.confirm(&self.kb, &vets, &crate::ui_util::local_today());
+            if !notes.is_empty() {
+                crate::parentage::track::save(&root, &plan)?;
+                msg += &format!(" {}", notes.join(" "));
+            }
+            if let Some(note) = crate::parentage::text::import_note(&self.kb, &plan, &vets) {
+                msg += &format!(" {note}");
+            }
         }
         Ok(msg)
     }

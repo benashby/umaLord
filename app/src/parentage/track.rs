@@ -7,14 +7,20 @@
 //! fits under the cap the new steps replace the old ones, otherwise the plan waits for the player
 //! to pick another route.
 
-use super::jobs::{Proposal, Run};
-use super::{Goal, Inventory};
+use super::jobs::{Pin, Proposal, Run};
+use super::{Goal, Inventory, Parent};
 use crate::knowledge::Knowledge;
 use crate::veterans::Veteran;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const FILE: &str = "plans/parents.json";
+/// Cancelled plans, kept to look back on.
+pub const PAST: &str = "plans/past-parent-plans";
+/// Ids for parents the player checked off by hand, until an import brings the real one.
+const DECLARED: u64 = u64::MAX - 1000;
+/// Undo levels kept.
+const UNDO: usize = 20;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
@@ -32,6 +38,13 @@ pub struct ParentPlan {
     pub over_cap: bool,
     /// What happened, oldest first.
     pub log: Vec<String>,
+    /// Paused: imports aren't checked against it.
+    pub paused: bool,
+    /// The player's pinned choice for the next step.
+    pub pin: Pin,
+    /// The plan before its last change, for Undo (each holds its own, up to `UNDO` deep).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<Box<ParentPlan>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -45,6 +58,24 @@ pub struct Step {
     pub done: Option<u64>,
     /// Kept without all its must-haves.
     pub settled: bool,
+    /// Checked off by hand before the import: the sparks the player says she got. The step
+    /// counts as done, with her as a parent the plan can use, until an import confirms her.
+    pub declared: Option<Vec<u32>>,
+}
+
+impl Step {
+    /// Done, or checked off by hand.
+    pub fn finished(&self) -> bool {
+        self.done.is_some() || self.declared.is_some()
+    }
+}
+
+/// How the player marks a step done.
+pub enum Mark {
+    /// A finished uma the import brought.
+    Finished(u64),
+    /// What she got, before the import: spark ids.
+    Declared(Vec<u32>),
 }
 
 /// A finished uma that counts for the current step.
@@ -63,11 +94,153 @@ impl ParentPlan {
     pub fn new(goal: Goal, p: &Proposal, vets: &[Veteran], today: &str) -> Self {
         let after = newest(vets);
         let steps = p.steps.iter().map(|r| Step { run: r.clone(), after: after.clone(), ..Default::default() }).collect();
-        ParentPlan { goal, made: today.into(), steps, partner: p.partner, blocked: None, over_cap: p.over_cap, log: vec![format!("{today}: planned.")] }
+        ParentPlan { goal, made: today.into(), steps, partner: p.partner, over_cap: p.over_cap, log: vec![format!("{today}: planned.")], ..Default::default() }
     }
 
     pub fn current(&self) -> Option<usize> {
-        self.steps.iter().position(|s| s.done.is_none())
+        self.steps.iter().position(|s| !s.finished())
+    }
+
+    /// Keep the plan as it is now for Undo.
+    fn snapshot(&mut self) {
+        fn trim(p: &mut ParentPlan, depth: usize) {
+            match p.before.as_mut() {
+                Some(_) if depth == 0 => p.before = None,
+                Some(b) => trim(b, depth - 1),
+                None => {}
+            }
+        }
+        let mut prev = self.clone();
+        trim(&mut prev, UNDO - 1);
+        self.before = Some(Box::new(prev));
+    }
+
+    /// Put the plan back as it was before its last change.
+    pub fn undo(&mut self, today: &str) -> Result<String, String> {
+        let prev = self.before.take().ok_or("Nothing to undo.")?;
+        let log = self.log.clone();
+        *self = *prev;
+        self.log = log;
+        self.log.push(format!("{today}: undid the last change."));
+        Ok("Undone: the plan is as it was before the last change.".into())
+    }
+
+    /// The account's parents plus the ones checked off by hand, which the plan can already use.
+    pub fn inventory(&self, kb: &Knowledge, inv: &Inventory) -> Inventory {
+        let mut out = inv.clone();
+        for (i, s) in self.steps.iter().enumerate() {
+            let (Some(own), None) = (&s.declared, s.done) else { continue };
+            let legs: Vec<&Parent> = s.run.legacies.iter().filter_map(|id| inv.by_id(*id)).collect();
+            if let [a, b] = legs[..] {
+                let mut p = Parent::planned(kb, s.run.trainee, own.clone(), a, b);
+                p.id = DECLARED + i as u64;
+                out.parents.push(p);
+            }
+        }
+        out
+    }
+
+    /// Mark the current step done: with a finished uma the import brought, or with what she got
+    /// before the import. Then the plan is worked out again.
+    pub fn check_off(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], mark: Mark, today: &str) -> Result<String, String> {
+        match mark {
+            Mark::Finished(id) => self.settle(kb, inv, vets, id, today),
+            Mark::Declared(own) => {
+                if let Some(why) = &self.blocked {
+                    return Err(format!("The plan is waiting for your choice ({why}): plan another route first."));
+                }
+                let i = self.current().ok_or("Every step is done: the runner's lineage is ready.")?;
+                self.snapshot();
+                let step = &mut self.steps[i];
+                let met = step.run.must.iter().all(|w| w.met(&own));
+                let mut msg = if met { format!("Step {} checked off; the next import confirms her.", i + 1) } else { format!("Step {} checked off short of {}; the next import confirms her.", i + 1, missing(kb, &step.run, &own)) };
+                step.settled = !met;
+                step.declared = Some(own);
+                self.log.push(format!("{today}: {msg}"));
+                msg += " ";
+                msg += &self.revalidate(kb, inv, vets, today);
+                Ok(msg)
+            }
+        }
+    }
+
+    /// After an import: link each step checked off by hand to the finished uma that matches what
+    /// was declared, or say none does. Returns a note per step.
+    pub fn confirm(&mut self, kb: &Knowledge, vets: &[Veteran], today: &str) -> Vec<String> {
+        let mut notes = Vec::new();
+        for i in 0..self.steps.len() {
+            let s = &self.steps[i];
+            let (Some(own), None) = (s.declared.clone(), s.done) else { continue };
+            let since: Vec<&Veteran> = vets.iter().filter(|v| v.card_id == s.run.trainee && created(v) > s.after).collect();
+            if let Some(v) = since.iter().find(|v| own.iter().all(|f| v.factors().contains(f))) {
+                let id = v.trained_chara_id;
+                let virt = DECLARED + i as u64;
+                self.steps[i].done = Some(id);
+                self.steps[i].declared = None;
+                // A later step or the partner may already use her by her stand-in id.
+                for later in &mut self.steps {
+                    for l in &mut later.run.legacies {
+                        if *l == virt {
+                            *l = id;
+                        }
+                    }
+                }
+                if self.partner == Some(virt) {
+                    self.partner = Some(id);
+                }
+                if self.pin.legacy == Some(virt) {
+                    self.pin.legacy = Some(id);
+                }
+                notes.push(format!("Step {}: the import confirms #{id}.", i + 1));
+            } else if !since.is_empty() {
+                notes.push(format!(
+                    "Step {}: no imported {} has what you checked off ({}). Undo the check-off, or keep one of the imported ones.",
+                    i + 1,
+                    super::uma_name(kb, s.run.trainee),
+                    own.iter().filter_map(|f| kb.sparks.get(f)).map(|x| format!("{} {}★", x.name, x.stars)).collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        for n in &notes {
+            self.log.push(format!("{today}: {n}"));
+        }
+        notes
+    }
+
+    /// Pause (imports aren't checked) or resume.
+    pub fn set_paused(&mut self, paused: bool, today: &str) {
+        self.paused = paused;
+        self.log.push(format!("{today}: {}.", if paused { "paused" } else { "resumed" }));
+    }
+
+    /// What a new goal would do to the plan, without changing it: the proposal and a summary.
+    pub fn preview_goal(&self, kb: &Knowledge, inv: &Inventory, goal: &Goal) -> (Proposal, String) {
+        let p = super::jobs::propose(kb, goal, &self.inventory(kb, inv));
+        let summary = changes(kb, &self.remaining(), &p.steps);
+        (p, summary)
+    }
+
+    /// Change the goal and work the plan out again (the pin goes: it was for the old goal).
+    pub fn set_goal(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], goal: Goal, today: &str) -> String {
+        self.snapshot();
+        self.goal = goal;
+        self.pin = Pin::default();
+        self.log.push(format!("{today}: changed the goal."));
+        self.revalidate(kb, inv, vets, today)
+    }
+
+    /// Keep a choice for the next step (a trainee, one of her parents, or the runner's partner)
+    /// and plan the rest around it.
+    pub fn set_pin(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], pin: Pin, today: &str) -> String {
+        self.snapshot();
+        self.pin = pin;
+        self.log.push(format!("{today}: {}.", if self.pin.is_empty() { "cleared the pinned choice" } else { "pinned a choice for the next step" }));
+        self.revalidate(kb, inv, vets, today)
+    }
+
+    /// The steps still to run.
+    pub fn remaining(&self) -> Vec<Run> {
+        self.steps.iter().filter(|s| !s.finished()).map(|s| s.run.clone()).collect()
     }
 
     /// The current step's finished umas, newest first.
@@ -111,6 +284,7 @@ impl ParentPlan {
     /// account as it is now. Returns what changed.
     pub fn settle(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], id: u64, today: &str) -> Result<String, String> {
         let (i, same, met) = self.judge(kb, vets, id)?;
+        self.snapshot();
         let own = vets.iter().find(|v| v.trained_chara_id == id).map(|v| v.factors()).unwrap_or_default();
         let step = &mut self.steps[i];
         step.done = Some(id);
@@ -130,8 +304,9 @@ impl ParentPlan {
 
     /// Work the remaining steps out again from what the account has now.
     pub fn revalidate(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], today: &str) -> String {
-        let p = super::jobs::propose(kb, &self.goal, inv);
-        let done: Vec<Step> = self.steps.iter().filter(|s| s.done.is_some()).cloned().collect();
+        let p = super::jobs::propose_pinned(kb, &self.goal, &self.inventory(kb, inv), &self.pin);
+        let old = self.remaining();
+        let done: Vec<Step> = self.steps.iter().filter(|s| s.finished()).cloned().collect();
         let after = newest(vets);
         let msg = if p.now.as_ref().is_some_and(super::score::Lineage::meets) {
             self.blocked = None;
@@ -145,11 +320,19 @@ impl ParentPlan {
             self.partner = None;
             format!("The goal no longer fits: {why}. Pick another route: another runner or goal, a friend's legacy, or the cheapest route past the cap if you accept it.")
         } else {
-            let same = p.steps.iter().map(|r| (r.trainee, &r.must)).eq(self.steps.iter().filter(|s| s.done.is_none()).map(|s| (s.run.trainee, &s.run.must)));
             self.blocked = None;
             self.partner = p.partner;
-            self.steps = done.into_iter().chain(p.steps.iter().map(|r| Step { run: r.clone(), after: after.clone(), ..Default::default() })).collect();
-            if same { "The rest of the plan stands.".into() } else { "The plan's next steps changed to fit what you have now.".into() }
+            // A step that stays the same keeps when it began, so careers already run still count.
+            let kept: Vec<Step> = p
+                .steps
+                .iter()
+                .map(|r| match self.steps.iter().find(|s| !s.finished() && s.run.trainee == r.trainee && s.run.legacies == r.legacies && s.run.must == r.must) {
+                    Some(s) => Step { run: r.clone(), after: s.after.clone(), ..Default::default() },
+                    None => Step { run: r.clone(), after: after.clone(), ..Default::default() },
+                })
+                .collect();
+            self.steps = done.into_iter().chain(kept).collect();
+            changes(kb, &old, &p.steps)
         };
         self.log.push(format!("{today}: {msg}"));
         msg
@@ -171,6 +354,62 @@ fn same_parents(step: &Step, v: &Veteran, vets: &[Veteran]) -> bool {
         want.sort_unstable();
         got == want
     })
+}
+
+/// What changed between the steps to run before and after a re-plan, in plain words.
+pub fn changes(kb: &Knowledge, old: &[Run], new: &[Run]) -> String {
+    let same = |a: &Run, b: &Run| a.trainee == b.trainee && a.legacies == b.legacies && a.must == b.must;
+    if old.len() == new.len() && old.iter().zip(new).all(|(a, b)| same(a, b)) {
+        return "The rest of the plan stands.".into();
+    }
+    let musts = |r: &Run| if r.must.is_empty() { "just finishing her".to_string() } else { r.must.iter().map(|w| w.label(kb)).collect::<Vec<_>>().join(", ") };
+    let name = |u: u32| super::uma_name(kb, u);
+    let mut out = Vec::new();
+    for i in 0..old.len().max(new.len()) {
+        match (old.get(i), new.get(i)) {
+            (Some(a), Some(b)) if same(a, b) => {}
+            (Some(a), Some(b)) if a.trainee != b.trainee => out.push(format!("the next step {} is now a career of {} ({}) instead of {}", i + 1, name(b.trainee), musts(b), name(a.trainee))),
+            (Some(a), Some(b)) if a.must != b.must => out.push(format!("step {} of {} now needs {} instead of {}", i + 1, name(b.trainee), musts(b), musts(a))),
+            (Some(_), Some(b)) => out.push(format!("step {} of {} now runs with other parents", i + 1, name(b.trainee))),
+            (None, Some(b)) => out.push(format!("a step is added: a career of {} ({})", name(b.trainee), musts(b))),
+            (Some(a), None) => out.push(format!("the step of {} isn't needed any more", name(a.trainee))),
+            (None, None) => {}
+        }
+    }
+    let mut s = out.join("; ");
+    if let Some(c) = s.get(..1) {
+        s = c.to_uppercase() + &s[1..];
+    }
+    format!("{s}.")
+}
+
+/// Cancel the saved plan: it moves to the past plans, with how far it got.
+pub fn cancel(root: &Path, today: &str) -> Result<String, String> {
+    let mut plan = load(root).ok_or("No parent plan to cancel.")?;
+    plan.log.push(format!("{today}: cancelled."));
+    plan.before = None;
+    let dir = root.join(PAST);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let name = format!("{}-{}-{}.json", plan.made, plan.goal.runner, crate::profile::stamp().rsplit('-').next().unwrap_or_default());
+    std::fs::write(dir.join(&name), serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
+    std::fs::remove_file(root.join(FILE)).map_err(|e| e.to_string())?;
+    Ok(format!("Cancelled; it's kept under {PAST}/{name}."))
+}
+
+/// Cancelled plans, newest first.
+pub fn past(root: &Path) -> Vec<ParentPlan> {
+    let mut out: Vec<(String, ParentPlan)> = std::fs::read_dir(root.join(PAST))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let plan: ParentPlan = serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+            Some((name, plan))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|p| p.1).collect()
 }
 
 /// The must-haves a finished uma lacks.
@@ -263,6 +502,74 @@ mod tests {
         assert_eq!(plan.steps.len(), 1, "only the step kept stays");
         let text = super::super::text::plan(&kb, &plan, &none, &vets);
         assert!(text.contains("Waiting for your choice") && !text.contains("Every step is done"), "{text}");
+    }
+
+    #[test]
+    fn check_off_by_hand_then_import() {
+        let (kb, _, mut vets, mut plan) = start();
+        let inv = Inventory::new(&kb, &vets, vec![(105201, 3)]);
+        let dirt = spark(&kb, "pink", "Dirt", 2);
+        let msg = plan.check_off(&kb, &inv, &vets, Mark::Declared(vec![dirt]), "d1").unwrap();
+        assert!(msg.contains("checked off") && msg.contains("meet the goal"), "{msg}");
+        assert_eq!(plan.current(), None);
+        // An import without her: nothing confirmed, nothing flagged.
+        assert!(plan.confirm(&kb, &vets, "d2").is_empty());
+        // One without what was declared: flagged.
+        vets.push(vet(4, 105201, "2026-10-20 10:00:00", &[spark(&kb, "pink", "Sprint", 2)], &[(10, 106801), (20, 100201)]));
+        let notes = plan.confirm(&kb, &vets, "d2");
+        assert!(notes[0].contains("no imported") && notes[0].contains("Dirt 2★"), "{notes:?}");
+        // The real one: confirmed.
+        vets.push(vet(5, 105201, "2026-10-21 10:00:00", &[dirt, spark(&kb, "blue", "Speed", 1)], &[(10, 106801), (20, 100201)]));
+        let notes = plan.confirm(&kb, &vets, "d3");
+        assert!(notes[0].contains("#5"), "{notes:?}");
+        assert_eq!((plan.steps[0].done, plan.steps[0].declared.is_none()), (Some(5), true));
+    }
+
+    #[test]
+    fn undo_pin_goal_pause_and_cancel() {
+        let (kb, goal, mut vets, mut plan) = start();
+        let owned = vec![(105201, 3), (101901, 3)];
+        let inv = Inventory::new(&kb, &vets, owned.clone());
+        let plan0 = plan.clone();
+        // Pin Agnes Digital as the next step's trainee: the step follows.
+        let msg = plan.set_pin(&kb, &inv, &vets, Pin { trainee: Some(101901), ..Default::default() }, "d1");
+        assert_eq!(plan.steps[0].run.trainee, 101901, "{msg}");
+        assert!(msg.contains("Agnes Digital") && msg.contains("instead of"), "{msg}");
+        // Undo puts it back.
+        plan.undo("d2").unwrap();
+        assert_eq!(plan.steps, plan0.steps);
+        assert!(plan.undo("d2").is_err());
+        // A settle, then undo reopens the step.
+        vets.push(vet(4, 105201, "2026-10-20 10:00:00", &[spark(&kb, "pink", "Dirt", 2)], &[(10, 106801), (20, 100201)]));
+        let inv = Inventory::new(&kb, &vets, owned.clone());
+        plan.settle(&kb, &inv, &vets, 4, "d3").unwrap();
+        assert_eq!(plan.current(), None);
+        plan.undo("d4").unwrap();
+        assert_eq!(plan.current(), Some(0));
+        assert!(plan.log.iter().any(|l| l.contains("undid")));
+        // A new goal, previewed first: Oguri for Long too (she's B there; Kitasan Black, A in
+        // Long, can make the pink).
+        let inv = Inventory::new(&kb, &vets, vec![(105201, 3), (101901, 3), (106801, 3)]);
+        let longer = Goal { targets: vec![1, 5], ..goal.clone() };
+        let (p, summary) = plan.preview_goal(&kb, &inv, &longer);
+        assert!(!p.steps.is_empty() && !summary.is_empty());
+        let before = plan.clone();
+        assert_eq!(plan, before, "a preview changes nothing");
+        plan.set_goal(&kb, &inv, &vets, longer.clone(), "d5");
+        assert_eq!(plan.goal, longer);
+        // Paused: no import note.
+        plan.set_paused(true, "d6");
+        assert!(super::super::text::import_note(&kb, &plan, &vets).is_none());
+        // Cancel moves it to the past plans.
+        let dir = std::env::temp_dir().join(format!("umalord-parent-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        save(&dir, &plan).unwrap();
+        let msg = cancel(&dir, "d7").unwrap();
+        assert!(load(&dir).is_none() && msg.contains(PAST));
+        let past = past(&dir);
+        assert_eq!(past.len(), 1);
+        assert!(past[0].log.last().is_some_and(|l| l.contains("cancelled")) && past[0].before.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

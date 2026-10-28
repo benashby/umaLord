@@ -130,6 +130,9 @@ pub fn proposal(kb: &Knowledge, goal_: &Goal, inv: &Inventory, p: &Proposal, per
     }
     let total = p.careers();
     out += &format!("About {total:.1} careers in all, {:.1} days at {per_day} parent careers a day.", total / per_day.max(0.1));
+    let v = super::verify::verify(&p.steps, None, 4000, 12345.0);
+    let [lo, mid, hi] = v.cautious.pctl;
+    out += &format!(" Half the time it takes {mid} or fewer, nine times in ten {hi} or fewer (at least {lo}); with the best-case rule, {} and {}.", v.best.pctl[1], v.best.pctl[2]);
     if p.over_cap {
         out += &format!("\n⚠ Nothing fits under {CAP:.0} careers a step: this is the cheapest route anyway. Better options: borrow a friend's legacy with the missing pinks, pick another runner, or accept a lower grade.");
     }
@@ -149,10 +152,18 @@ pub fn plan(kb: &Knowledge, plan: &ParentPlan, inv: &Inventory, vets: &[Veteran]
     if let Some(why) = &plan.blocked {
         out += &format!("⚠ Waiting for your choice: {why}. Pick another route: another runner or goal, a friend's legacy, or the cheapest route past the cap if you accept it.\n");
     }
+    if plan.paused {
+        out += "⏸ Paused: imports aren't checked against it until you resume.\n";
+    }
     for (i, s) in plan.steps.iter().enumerate() {
-        match s.done {
-            Some(id) => out += &format!("Step {}: done with #{id}{}.\n", i + 1, if s.settled { " (settled for, short of its must-haves)" } else { "" }),
-            None => out += &step(kb, inv, i + 1, &s.run),
+        let short = if s.settled { " (settled for, short of its must-haves)" } else { "" };
+        match (s.done, &s.declared) {
+            (Some(id), _) => out += &format!("Step {}: done with #{id}{short}.\n", i + 1),
+            (None, Some(own)) => {
+                let got: Vec<String> = own.iter().filter_map(|f| kb.sparks.get(f)).map(|x| format!("{} {}★", x.name, x.stars)).collect();
+                out += &format!("Step {}: checked off by hand ({}){short}, waiting for the import to confirm her.\n", i + 1, got.join(", "));
+            }
+            (None, None) => out += &step(kb, inv, i + 1, &s.run),
         }
     }
     if let Some(w) = plan.partner {
@@ -160,6 +171,10 @@ pub fn plan(kb: &Knowledge, plan: &ParentPlan, inv: &Inventory, vets: &[Veteran]
     }
     if plan.blocked.is_some() {
         return out;
+    }
+    if !plan.log.is_empty() {
+        let n = plan.log.len();
+        out += &format!("History{}: {}\n", if n > 5 { " (latest 5)" } else { "" }, plan.log[n.saturating_sub(5)..].join(" · "));
     }
     let Some(cur) = plan.current() else {
         return out + "Every step is done: train the runner with the lineage the plan ends in.";
@@ -187,6 +202,9 @@ pub fn plan(kb: &Knowledge, plan: &ParentPlan, inv: &Inventory, vets: &[Veteran]
 
 /// The line an import adds when a plan is open.
 pub fn import_note(kb: &Knowledge, plan: &ParentPlan, vets: &[Veteran]) -> Option<String> {
+    if plan.paused || plan.blocked.is_some() {
+        return None;
+    }
     let cur = plan.current()?;
     let hit = plan.hits(vets).into_iter().find(|h| h.must)?;
     let must = &plan.steps[cur].run.must;

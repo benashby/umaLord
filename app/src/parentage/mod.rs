@@ -16,6 +16,7 @@ pub mod outcome;
 pub mod score;
 pub mod text;
 pub mod track;
+pub mod verify;
 
 use crate::affinity::chara;
 use crate::knowledge::{Aptitude, Knowledge, grade_rank};
@@ -176,6 +177,7 @@ impl Goal {
 
 /// The account as the planner needs it: its finished umas, the umas it can train (id, stars),
 /// and what its past careers say about how parents finish.
+#[derive(Clone)]
 pub struct Inventory {
     pub parents: Vec<Parent>,
     pub owned: Vec<(u32, u8)>,
