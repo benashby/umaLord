@@ -233,10 +233,9 @@ impl App {
                     let font = |sz: f32, bold: bool| if bold { FontId::new(sz, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())) } else { FontId::proportional(sz) };
                     let mut add = |t: &str, bold: bool, c: Color32, sz: f32| job.append(t, 0.0, egui::TextFormat { font_id: font(sz, bold), color: c, ..Default::default() });
                     add("Today about ", false, p.text, 14.0);
-                    add(&thousands(team.today_total), true, p.text, 14.0);
+                    add(&thousands((team.today_total / 1000.0).round() * 1000.0), true, p.text, 14.0);
                     add("; raced together, the plan beats it by ", false, p.text, 14.0);
-                    add(&format!("about +{}", thousands(team.gain)), true, p.good, 14.0);
-                    add(&format!("   (the plan alone scores about {} a round: an estimate)", thousands(team.total)), false, p.weak, 12.5);
+                    add(&format!("about +{}", thousands((team.gain / 1000.0).round() * 1000.0)), true, p.good, 14.0);
                     ui.label(job);
                 });
             });
@@ -284,7 +283,13 @@ impl App {
                             .iter()
                             .map(|s| {
                                 let tag = if today_names.contains(&s.trainee) { "as today" } else { "new career" };
-                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note: if s.ace { format!("★ Ace · {tag}") } else { tag.to_string() }, note_color: if s.ace { p.gold } else { p.weak } }
+                                let shaky = s.notes.iter().any(|n| n.contains("unreliably"));
+                                let note = match (s.ace, shaky) {
+                                    (_, true) => format!("⚠ unreliable unique · {tag}"),
+                                    (true, _) => format!("★ Ace · {tag}"),
+                                    _ => tag.to_string(),
+                                };
+                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky { p.warn } else if s.ace { p.gold } else { p.weak } }
                             })
                             .collect();
                         self.who_flow(ui, &items);
@@ -305,7 +310,7 @@ impl App {
                             plan_ui(ui);
                         });
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| match row.gain {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match row.gain {
                         Some(g) => _ = ui.label(semibold(format!("{}{}", if g >= 0.0 { "+" } else { "" }, thousands(g)), 15.0).color(if g >= 0.0 { p.good } else { p.warn })),
                         None => _ = ui.label(RichText::new("—").size(15.0).color(p.weak)),
                     });
@@ -314,7 +319,7 @@ impl App {
             ui.separator();
             ui.label(RichText::new("Points per round, raced in the simulator (an estimate: the real races have twelve runners). — : not raced, no finished uma of yours can run it.").size(12.0).color(p.weak));
         });
-        for n in &team.notes {
+        for n in team.notes.iter().filter(|n| !n.starts_with("Scores are estimates")) {
             ui.label(RichText::new(n).size(12.0).color(p.weak));
         }
     }
@@ -328,25 +333,16 @@ impl App {
                 if team.today.is_empty() {
                     ui.label(RichText::new("none of your finished umas can run this course yet").color(pal(ui).weak));
                 }
-                for t in &team.today {
-                    egui::Frame::new().fill(pal(ui).raised).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin::symmetric(8, 3)).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            self.avatar(ui, t.outfit, 24.0);
-                            ui.label(RichText::new(format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit))).size(13.0));
-                            if let Some(s) = t.share {
-                                ui.label(RichText::new(format!("wins {:.0}%", s * 100.0)).size(12.0).color(pal(ui).weak));
-                            }
-                        });
-                    });
-                }
             });
+            let items: Vec<Who> = team.today.iter().map(|t| Who { uma: t.outfit, name: format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit)), note: t.share.map_or(String::new(), |s| format!("wins {:.0}%", s * 100.0)), note_color: pal(ui).weak }).collect();
+            self.who_flow(ui, &items);
             ui.label(RichText::new("The best team from your finished umas as they are: their own stats, skills and aptitudes, raced in the simulator. The plan's gains are measured against it.").size(12.0).color(pal(ui).weak));
         });
     }
 
     fn runner_cards(&self, ui: &mut egui::Ui, team: &CmTeam) {
         let n = team.runners.len().max(1);
-        let narrow = ui.available_width() < 900.0;
+        let narrow = ui.available_width() < 1100.0;
         let draw = |ui: &mut egui::Ui, r: &crate::parentage::team::Runner, ace: bool| {
             crate::ui_util::card(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -407,7 +403,7 @@ impl App {
         crate::ui_util::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(semibold("Parent queue", 15.5));
-                ui.label(RichText::new(format!("{} step{} · about {:.0} careers of the {:.0} there's time for", queue.len(), if queue.len() == 1 { "" } else { "s" }, team.needed, team.budget)).size(12.5).color(pal(ui).weak));
+                ui.label(RichText::new(format!("{} step{} · {} careers there's time for before the CM", queue.len(), if queue.len() == 1 { "" } else { "s" }, team.budget.round())).size(12.5).color(pal(ui).weak));
             });
             if queue.is_empty() {
                 ui.label(RichText::new("No parent careers needed: train the three.").color(pal(ui).weak));
@@ -415,19 +411,20 @@ impl App {
             for (k, q) in queue.iter().enumerate() {
                 egui::Frame::new().fill(pal(ui).raised).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
+                    ui.horizontal(|ui| {
                         pill(ui, &if k == 0 { format!("Step {} · ▶ Current", k + 1) } else { format!("Step {} · Next", k + 1) }, pal(ui).accent);
                         ui.label(RichText::new("⏳").size(13.0)).on_hover_text("Independent Training: a parent career runs in the background");
                         self.avatar(ui, q.trainee, 32.0);
                         ui.vertical(|ui| {
                             ui.label(semibold(format!("{} as {}", crate::parentage::uma_name(&self.kb, q.trainee), q.style), 13.5));
-                            ui.label(RichText::new(format!("For {}: {}", crate::parentage::uma_name(&self.kb, q.for_runner), q.what)).size(12.0).color(pal(ui).weak));
+                            ui.add(egui::Label::new(RichText::new(format!("For {}: {}", crate::parentage::uma_name(&self.kb, q.for_runner), q.what)).size(12.0).color(pal(ui).weak)).wrap());
                         });
-                        for (id, uma) in &q.legacies {
-                            self.avatar(ui, *uma, 24.0);
-                            ui.label(RichText::new(if *id == 0 { "any".to_string() } else { format!("#{id}") }).size(12.0));
-                        }
-                        ui.label(RichText::new("Trackblazer").size(12.5).color(pal(ui).weak));
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(4.0);
+                        let items: Vec<Who> = q.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: if *id == 0 { "any legacy".into() } else { format!("#{id} {}", short_name(&self.kb, *uma)) }, note: String::new(), note_color: pal(ui).weak }).collect();
+                        self.who_flow(ui, &items);
+                        ui.label(RichText::new("· Trackblazer ·").size(12.5).color(pal(ui).weak));
                         ui.label(semibold(&q.careers, 13.0));
                     });
                 });
@@ -653,10 +650,7 @@ impl App {
                     for (name, grades, chance) in &b.agenda {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(name).size(12.5));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(format!("~{chance}%")).size(12.5).color(if *chance >= 90 { p.good } else { p.warn }));
-                                pill(ui, grades, p.weak);
-                            });
+                            pill(ui, &format!("{grades} · ~{chance}%"), if *chance >= 90 { p.good } else { p.warn });
                         });
                     }
                     ui.label(RichText::new("Won on surface and distance grades alone: A/A starts at 110%, 10 less per grade below A, shown capped at 100%. Independent Training: −10 / −25 / −35 / −50 for a 3rd / 4th / 5th / 6th race in a row. Manual: a 3rd race in a row risks her mood, a 4th her stats.").size(11.5).color(p.weak));

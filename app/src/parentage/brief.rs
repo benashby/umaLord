@@ -292,6 +292,11 @@ impl App {
 }
 
 /// The brief as text: "What to do next".
+/// A lineage's two legacies as (finished uma id, outfit), for the page's avatar chips.
+fn legacies_of(l: Option<&super::score::Lineage>, inv: &Inventory) -> Vec<(u64, u32)> {
+    l.map(|l| l.legacies.iter().filter_map(|i| inv.parents.get(*i)).map(|p| (p.id, p.uma)).collect()).unwrap_or_default()
+}
+
 pub fn text(kb: &Knowledge, b: &Brief) -> String {
     let deck: Vec<String> = b.deck.iter().filter_map(|c| kb.cards.get(c).map(|c| format!("{} [{}]", c.uma, c.title))).collect();
     let friend = b.friend.and_then(|c| kb.cards.get(&c)).map_or("none".into(), |c| format!("{} [{}], fully limit broken (MLB)", c.uma, c.title));
@@ -323,7 +328,9 @@ impl App {
         }
         let ace = team.runners.iter().max_by(|a, b| a.sim.map_or(0.0, |s| s.0).total_cmp(&b.sim.map_or(0.0, |s| s.0)))?;
         let parents = ace.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
-        Some(self.runner_brief(format!("Her own career for CM {} ({}): she wins most head to head, so she's the ace.", team.event.id, team.event.name), &ace.plan, Some((ace.plan.target[1], team.event.course_name.clone())), parents))
+        let mut b = self.runner_brief(format!("Her own career for CM {} ({}): she wins most head to head, so she's the ace.", team.event.id, team.event.name), &ace.plan, Some((ace.plan.target[1], team.event.course_name.clone())), parents);
+        b.legacies = legacies_of(ace.parents.now.as_ref(), inv);
+        Some(b)
     }
 
     /// A Team Trials team's next career: the weakest runner's first parent step, else her own
@@ -356,14 +363,17 @@ impl App {
                 let plan = self.tt_runner_plan(&meta, row.name, r.id, style);
                 let replaced = uma_name(&self.kb, s.trainee);
                 let goal = super::tt::Slot { trainee: r.id, style, ..s.clone() }.parents_goal(row.name);
-                let parents = super::score::rank(&self.kb, &goal, &inv.parents, 1)
-                    .first()
+                let best = super::score::rank(&self.kb, &goal, &inv.parents, 1).into_iter().next();
+                let parents = best
+                    .as_ref()
                     .map(|l| {
                         let names = l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and ");
                         if l.meets() { names } else { format!("{names} (her best pair, though short of A somewhere: see her lineage plan)") }
                     })
                     .unwrap_or_else(|| "any two legacies (yours or a friend's)".into());
-                return Some(self.runner_brief(format!("Her own career for Team Trials ({}), to replace {replaced}, whose unique fires unreliably.", row.name), &plan, Some((plan.target[1], row.name.to_string())), parents));
+                let mut b = self.runner_brief(format!("Her own career for Team Trials ({}), to replace {replaced}, whose unique fires unreliably.", row.name), &plan, Some((plan.target[1], row.name.to_string())), parents);
+                b.legacies = legacies_of(best.as_ref(), inv);
+                return Some(b);
             }
         }
         // Parents first only when her finished umas don't yet start her race's grades at A.
@@ -371,7 +381,9 @@ impl App {
             return Some(self.parent_brief(&s.parents_goal(row.name), run, inv, 0));
         }
         let parents = s.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
-        Some(self.runner_brief(format!("Her own career for Team Trials ({}): she scores lowest on the team, so a better run of her raises it most.", row.name), &s.plan, Some((s.plan.target[1], row.name.to_string())), parents))
+        let mut b = self.runner_brief(format!("Her own career for Team Trials ({}): she scores lowest on the team, so a better run of her raises it most.", row.name), &s.plan, Some((s.plan.target[1], row.name.to_string())), parents);
+        b.legacies = legacies_of(s.parents.now.as_ref(), inv);
+        Some(b)
     }
 }
 

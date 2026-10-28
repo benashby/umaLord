@@ -72,18 +72,20 @@ pub fn star(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, edge: Strok
 /// a light backing) or, when the uma is short, red slots; the rest empty grey.
 pub fn stars(painter: &egui::Painter, center: Pos2, r: f32, have: u8, wanted: Option<u8>, near_miss: bool) {
     let gap = r * 2.15;
+    // Wanted stars sit on a light backing, so hollow targets read on any chip colour.
+    if wanted.is_some() {
+        let back = Rect::from_center_size(center, vec2(gap * 2.0 + r * 2.6, r * 2.6));
+        painter.rect_filled(back, r * 1.3, Color32::from_white_alpha(225));
+    }
     for i in 0..3u8 {
         let c = center + vec2((i as f32 - 1.0) * gap, 0.0);
         if i < have {
             star(painter, c, r, GOLD, Stroke::new(1.0, GOLD_EDGE));
         } else if wanted.is_some_and(|w| i < w) {
-            if near_miss {
-                star(painter, c, r, Color32::from_rgb(0xFF, 0xF1, 0xF1), Stroke::new(1.6, MISS));
-            } else {
-                star(painter, c, r, Color32::from_rgb(0xFF, 0xF8, 0xE1), Stroke::new(1.6, GOLD_EDGE));
-            }
+            // A target: hollow, with a firm outline; red when she came up short.
+            star(painter, c, r, Color32::TRANSPARENT, Stroke::new(1.6, if near_miss { MISS } else { GOLD_EDGE }));
         } else {
-            star(painter, c, r, EMPTY, Stroke::new(1.0, EMPTY_EDGE));
+            star(painter, c, r * 0.85, EMPTY, Stroke::new(1.0, EMPTY_EDGE));
         }
     }
 }
@@ -134,7 +136,9 @@ pub fn spark_chip(ui: &mut egui::Ui, kind: Spark, name: &str, have: u8, wanted: 
     let (ball, ball_edge) = if kind == Spark::Green { (Color32::from_rgb(0xF5, 0xC5, 0x42), Color32::from_rgb(0xC9, 0x93, 0x1C)) } else { (Color32::from_rgb(0xC3, 0xCF, 0xEE), Color32::from_rgb(0x8E, 0x9C, 0xC8)) };
     p.circle(sc, sr, ball, Stroke::new(1.0, ball_edge));
     p.circle_filled(sc + vec2(-sr * 0.3, -sr * 0.3), sr * 0.35, Color32::from_white_alpha(200));
-    p.galley(pos2(sc.x + sr + 6.0, rect.center().y - galley.size().y / 2.0), galley, text);
+    let at = pos2(sc.x + sr + 6.0, rect.center().y - galley.size().y / 2.0);
+    p.galley(at + vec2(0.45, 0.0), galley.clone(), text);
+    p.galley(at, galley, text);
     if compact {
         stars(p, pos2(rect.right() - 6.0 - 2.15 * 6.5 - 6.5, rect.center().y), 6.5, have, wanted, near_miss);
     } else {
