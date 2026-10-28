@@ -219,18 +219,21 @@ impl AffinityTable {
     }
 }
 
-/// The text of every `JSON.parse('…')` in a script, unescaped.
-fn js_json_blocks(src: &str) -> Vec<String> {
+/// The text of every `JSON.parse('…')` or `` JSON.parse(`…`) `` in a script, unescaped.
+pub(crate) fn js_json_blocks(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = src;
-    while let Some(i) = rest.find("JSON.parse('") {
-        rest = &rest[i + "JSON.parse('".len()..];
+    // Single-quoted strings (the affinity tables) and template literals (the spark table) escape alike.
+    while let Some(i) = rest.find("JSON.parse(") {
+        rest = &rest[i + "JSON.parse(".len()..];
+        let Some(quote) = rest.chars().next().filter(|c| matches!(c, '\'' | '`')) else { continue };
+        rest = &rest[1..];
         let mut text = String::new();
         let mut chars = rest.char_indices();
         let mut end = None;
         while let Some((j, c)) = chars.next() {
             match c {
-                '\'' => {
+                c if c == quote => {
                     end = Some(j);
                     break;
                 }

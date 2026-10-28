@@ -403,6 +403,20 @@ impl App {
             self.open_setup(crate::onboarding::Step::Import);
             *close = true;
         }
+        let finished = self.veterans().len();
+        let about = format!(
+            "Your finished umas (parents) with their sparks and lineage, from UmaExtractor's data.json: takes it from Downloads, or drop it on the window. {}",
+            if finished == 0 { "None imported yet.".to_string() } else { format!("{finished} imported.") }
+        );
+        if action(ui, "🌱 Import finished umas", &about) {
+            match crate::settings::user_dir("Downloads").map(|d| d.join("data.json")).filter(|p| p.is_file()) {
+                Some(path) => {
+                    let r = self.import_veterans(&path);
+                    self.toast_flag(r.map_or_else(|e| (e, true), |m| (m, false)));
+                }
+                None => self.toast("No data.json in Downloads. Run UmaExtractor (or tools/read_veterans.py) on the game's Veteran List, then drop its data.json on the window.", ToastKind::Info),
+            }
+        }
         if action(ui, "📝 Set up my collection", "Click the umas and cards you own, and set stars and limit breaks.") {
             self.open_setup(crate::onboarding::Step::Umas);
             *close = true;

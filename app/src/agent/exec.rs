@@ -187,6 +187,21 @@ impl App {
         out
     }
 
+    /// A finished uma's sparks by colour: "Blue: Speed 3★. Pink: Turf 2★. Green: … White: …".
+    fn veteran_sparks(&self, v: &crate::veterans::Veteran) -> String {
+        let mut by: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+        for s in v.factors().iter().filter_map(|f| self.kb.sparks.get(f)) {
+            let k = match s.kind.as_str() {
+                "blue" => "1 Blue",
+                "pink" => "2 Pink",
+                "green" => "3 Green",
+                _ => "4 White",
+            };
+            by.entry(k).or_default().push(format!("{} {}★", s.name, s.stars));
+        }
+        by.iter().map(|(k, v)| format!("{}: {}.", &k[2..], v.join(", "))).collect::<Vec<_>>().join(" ")
+    }
+
     pub(crate) fn find_card_id(&self, q: &str) -> Result<u32, String> {
         let ql = q.trim().to_lowercase();
         if let Ok(id) = ql.parse::<u32>()
@@ -602,7 +617,16 @@ impl App {
             "get_affinity" => {
                 let trainee = self.find_character(input["trainee"].as_str().unwrap_or_default())?;
                 let mut legacies: [Option<crate::affinity::Legacy>; 2] = [None, None];
+                let finished = self.veterans();
                 for (i, l) in input["legacies"].as_array().into_iter().flatten().take(2).enumerate() {
+                    if let Some(id) = l["finished"].as_u64() {
+                        let v = finished.iter().find(|v| v.trained_chara_id == id).ok_or(format!("No finished uma #{id}; list_finished_umas lists them."))?;
+                        legacies[i] = Some(v.legacy(&self.kb));
+                        continue;
+                    }
+                    if l["uma"].as_str().is_none() {
+                        return Err("Each legacy needs an uma, or a finished uma's #id as finished.".into());
+                    }
                     let mut legacy = crate::affinity::Legacy { uma: self.find_character(l["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&l["g1_wins"])?, parents: [None, None] };
                     for (j, g) in l["parents"].as_array().into_iter().flatten().take(2).enumerate() {
                         legacy.parents[j] = Some(crate::affinity::Ancestor { uma: self.find_character(g["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&g["g1_wins"])? });
@@ -626,6 +650,22 @@ impl App {
                 };
                 let owned_only = input["owned_only"].as_bool().unwrap_or(false);
                 let top = int(input, "top_n").unwrap_or(10).clamp(1, 30) as usize;
+                if input["finished"].as_bool() == Some(true) {
+                    let finished = self.veterans();
+                    if finished.is_empty() {
+                        return Err("No finished umas imported yet (Settings → Profile → Import finished umas).".into());
+                    }
+                    let mut rows: Vec<(u32, String)> = finished
+                        .iter()
+                        .filter(|v| crate::affinity::chara(v.card_id) != crate::affinity::chara(trainee))
+                        .map(|v| {
+                            let a = t.legacy(trainee, &v.legacy(&self.kb), None);
+                            (a.total(), format!("#{} {} — affinity {} as a legacy ({} with the trainee, {} through its parents, +{} shared G1s). {}", v.trained_chara_id, self.kb.umas.get(&v.card_id).map_or_else(|| format!("uma {}", v.card_id), |u| format!("{} [{}]", u.name, u.outfit)), a.total(), a.direct, a.with_grandparent.iter().sum::<u32>(), a.grandparent_races.iter().sum::<u32>(), self.veteran_sparks(v)))
+                        })
+                        .collect();
+                    rows.sort_by(|a, b| b.0.cmp(&a.0));
+                    return Ok(rows.into_iter().take(top).map(|r| r.1).collect::<Vec<_>>().join("\n") + "\n(The other legacy adds its link and shared G1s on top: get_affinity.)");
+                }
                 let mut rows: Vec<(u32, u32, u32)> = t
                     .best_partners(trainee)
                     .into_iter()
@@ -646,6 +686,47 @@ impl App {
                     })
                     .collect();
                 Ok(if lines.is_empty() { "No candidates.".into() } else { lines.join("\n") })
+            }
+            "list_finished_umas" => {
+                let finished = self.veterans();
+                if finished.is_empty() {
+                    return Err("No finished umas imported yet (Settings → Profile → Import finished umas, from UmaExtractor's data.json).".into());
+                }
+                let uma = input["uma"].as_str().map(str::to_lowercase);
+                let spark = input["spark"].as_str().map(str::to_lowercase);
+                let kind = input["kind"].as_str();
+                let min = int(input, "min_stars").unwrap_or(1) as u8;
+                let top = int(input, "top_n").unwrap_or(20).clamp(1, 60) as usize;
+                let mut list: Vec<&crate::veterans::Veteran> = finished
+                    .iter()
+                    .filter(|v| uma.as_ref().is_none_or(|q| self.kb.umas.get(&v.card_id).is_some_and(|u| format!("{} [{}]", u.name, u.outfit).to_lowercase().contains(q.as_str()))))
+                    .filter(|v| {
+                        (spark.is_none() && kind.is_none() && min <= 1)
+                            || v.factors().iter().filter_map(|f| self.kb.sparks.get(f)).any(|s| {
+                                spark.as_ref().is_none_or(|q| s.name.to_lowercase().contains(q.as_str())) && kind.is_none_or(|k| s.kind == k) && s.stars >= min
+                            })
+                    })
+                    .collect();
+                list.sort_by(|a, b| b.rank_score.cmp(&a.rank_score));
+                let n = list.len();
+                let lines: Vec<String> = list
+                    .into_iter()
+                    .take(top)
+                    .map(|v| {
+                        let parents: Vec<String> = [10, 20].into_iter().filter_map(|p| v.ancestor(p)).map(|a| self.kb.umas.get(&a.card_id).map_or_else(|| format!("uma {}", a.card_id), |u| u.name.clone())).collect();
+                        format!(
+                            "#{} {} — {} rank ({}), {} G1 wins, parents: {}. {}",
+                            v.trained_chara_id,
+                            self.kb.umas.get(&v.card_id).map_or_else(|| format!("uma {}", v.card_id), |u| format!("{} [{}]", u.name, u.outfit)),
+                            v.rank_label(),
+                            v.rank_score,
+                            self.kb.g1_wins(&v.win_saddle_id_array).len(),
+                            if parents.is_empty() { "none recorded".into() } else { parents.join(" and ") },
+                            self.veteran_sparks(v)
+                        )
+                    })
+                    .collect();
+                Ok(format!("{n} match ({} imported).\n{}", finished.len(), lines.join("\n")))
             }
             "recommend_trainees" => {
                 let top = int(input, "top_n").unwrap_or(5).clamp(1, 12) as usize;

@@ -118,6 +118,11 @@ pub struct LiveData {
     pub uma_guide: SourceStatus,
     #[serde(default)]
     pub affinity: Option<crate::affinity::AffinityTable>,
+    /// The spark and win tables, from the same uma.guide download as the affinity tables.
+    #[serde(default)]
+    pub sparks: Option<Vec<crate::knowledge::SparkInfo>>,
+    #[serde(default)]
+    pub saddles: Option<std::collections::HashMap<u32, crate::knowledge::Saddle>>,
     /// The last try at the affinity tables (UTC seconds), so a failure waits a day to retry.
     #[serde(default)]
     pub affinity_tried: i64,
@@ -137,6 +142,8 @@ impl LiveData {
             }
             // The affinity tables refresh on their own thread and write these themselves.
             self.affinity = old.affinity.clone();
+            self.sparks = old.sparks.clone();
+            self.saddles = old.saddles.clone();
             self.uma_guide = old.uma_guide.clone();
             self.affinity_tried = old.affinity_tried;
         }
@@ -960,13 +967,27 @@ fn fetch_umalator() -> Result<Vec<EventPreset>, String> {
 
 /// The affinity tables from uma.guide's data chunk (about 10 MB), found the way
 /// `tools/update_knowledge.py` finds it: the characters page, then its app bundle.
-pub fn fetch_affinity() -> Result<crate::affinity::AffinityTable, String> {
+/// uma.guide's game tables the app refreshes itself: affinity, sparks and win records, all read
+/// from its data chunk. The spark and win tables are optional, so a change there never costs the
+/// affinity tables.
+pub struct UmaGuideTables {
+    pub affinity: crate::affinity::AffinityTable,
+    pub sparks: Option<Vec<crate::knowledge::SparkInfo>>,
+    pub saddles: Option<std::collections::HashMap<u32, crate::knowledge::Saddle>>,
+}
+
+pub fn fetch_uma_guide_tables() -> Result<UmaGuideTables, String> {
     let page = fetch(&format!("{UMA_GUIDE_URL}/characters/"), None)?;
     let app = find_asset(&page, "/assets/app.").ok_or("couldn't find uma.guide's app bundle")?;
     let bundle = fetch(&format!("{UMA_GUIDE_URL}{app}"), None)?;
     let chunk = find_asset(&format!("{page} {bundle}"), "chunks/uma-data.").ok_or("couldn't find uma.guide's data chunk")?;
     let url = if chunk.starts_with('/') { format!("{UMA_GUIDE_URL}{chunk}") } else { format!("{UMA_GUIDE_URL}/assets/{chunk}") };
-    crate::affinity::AffinityTable::from_uma_guide(&fetch_within(&url, None, 90)?, &iso(now()))
+    let data = fetch_within(&url, None, 90)?;
+    Ok(UmaGuideTables {
+        affinity: crate::affinity::AffinityTable::from_uma_guide(&data, &iso(now()))?,
+        sparks: crate::veterans::sparks_from_uma_guide(&data).ok(),
+        saddles: crate::veterans::saddles_from_uma_guide(&data).ok(),
+    })
 }
 
 /// The first `prefix….js` path in `text`.
@@ -1017,10 +1038,10 @@ pub fn spawn_refresh(ctx: Option<eframe::egui::Context>) -> Receiver<LiveData> {
 }
 
 /// The affinity tables on their own thread: a 10 MB download mustn't hold up the schedule.
-pub fn spawn_affinity(ctx: eframe::egui::Context) -> Receiver<Result<crate::affinity::AffinityTable, String>> {
+pub fn spawn_affinity(ctx: eframe::egui::Context) -> Receiver<Result<UmaGuideTables, String>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(fetch_affinity());
+        let _ = tx.send(fetch_uma_guide_tables());
         ctx.request_repaint();
     });
     rx
@@ -1207,8 +1228,11 @@ mod tests {
         let d = refresh();
         eprintln!("news: {:?}\numalator: {:?}", d.news, d.umalator);
         assert!(d.news.ok && d.umalator.ok);
-        let (live, bundled) = (fetch_affinity().unwrap(), kb().affinity);
-        assert_eq!((&live.points, &live.members), (&bundled.points, &bundled.members), "rerun tools/update_knowledge.py --only affinity if a character was added");
+        let (live, bundled) = (fetch_uma_guide_tables().unwrap(), kb());
+        assert_eq!((&live.affinity.points, &live.affinity.members), (&bundled.affinity.points, &bundled.affinity.members), "rerun tools/update_knowledge.py --only affinity if a character was added");
+        let sparks: std::collections::HashMap<u32, crate::knowledge::SparkInfo> = live.sparks.unwrap().into_iter().map(|s| (s.id, s)).collect();
+        assert_eq!(sparks, bundled.sparks, "the app reads the spark table as the updater writes it");
+        assert_eq!(live.saddles.unwrap(), bundled.saddles, "and the win table");
         let merged = merge(&kb(), &kb().umalator_presets, &d);
         for e in merged.iter().filter(|e| e.date.as_str() >= "2026-10-01") {
             eprintln!("{} {} {} {:?} announced={} disabled={}", e.date, e.name, e.course_name, e.source, e.announced, e.disabled_skills.len());
@@ -1225,7 +1249,7 @@ pub(crate) struct LiveState {
     /// What the last refresh found (from the cache until a refresh finishes).
     pub data: Option<LiveData>,
     pub rx: Option<Receiver<LiveData>>,
-    pub affinity_rx: Option<Receiver<Result<crate::affinity::AffinityTable, String>>>,
+    pub affinity_rx: Option<Receiver<Result<UmaGuideTables, String>>>,
     /// The bundled presets, merged again after every refresh and Reload.
     pub bundled: Vec<EventPreset>,
     /// Start a refresh on the next frame (there's no `Context` in `App::new`).
@@ -1284,6 +1308,13 @@ impl crate::App {
             // A fetched affinity table replaces the bundled one when it's newer.
             if let Some(a) = d.affinity.as_ref().filter(|a| !a.is_empty() && a.fetched > self.kb.affinity.fetched) {
                 self.kb.affinity = a.clone();
+                // The spark and win tables came in the same download, so they're as new.
+                if let Some(s) = d.sparks.as_ref().filter(|s| !s.is_empty()) {
+                    self.kb.sparks = s.iter().map(|s| (s.id, s.clone())).collect();
+                }
+                if let Some(w) = d.saddles.as_ref().filter(|w| !w.is_empty()) {
+                    self.kb.saddles = w.clone();
+                }
             }
         }
     }
@@ -1338,9 +1369,15 @@ impl crate::App {
         let d = self.live.data.get_or_insert_with(Default::default);
         d.affinity_tried = t;
         match result {
-            Ok(a) => {
-                d.uma_guide = SourceStatus { ok: true, message: format!("affinity for {} characters", a.members.len()), fetched_at: Some(t) };
-                d.affinity = Some(a);
+            Ok(g) => {
+                let extra = match (&g.sparks, &g.saddles) {
+                    (Some(s), Some(w)) => format!(", {} sparks, {} win records", s.len(), w.len()),
+                    _ => ", but not its spark or win table".into(),
+                };
+                d.uma_guide = SourceStatus { ok: true, message: format!("affinity for {} characters{extra}", g.affinity.members.len()), fetched_at: Some(t) };
+                d.affinity = Some(g.affinity);
+                d.sparks = g.sparks.or(d.sparks.take());
+                d.saddles = g.saddles.or(d.saddles.take());
             }
             Err(e) => {
                 d.uma_guide.ok = false;

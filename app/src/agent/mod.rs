@@ -259,7 +259,10 @@ fn build_registry() -> Vec<ToolSpec> {
     let purposes = json!({"type": "string", "enum": ["Champions Meeting", "Team Trials", "Parent run", "League of Heroes", "Other"]});
     let wins = json!({"type": "array", "items": {"type": "string"}, "description": "The G1 races it won, by their exact names in the game data (find_races finds them, e.g. 'Tokyo Yushun (Japanese Derby)'); leave out for none"});
     let ancestor = obj(json!({"uma": {"type": "string"}, "g1_wins": wins}), &["uma"]);
-    let legacy = obj(json!({"uma": {"type": "string"}, "g1_wins": wins, "parents": {"type": "array", "maxItems": 2, "items": ancestor}}), &["uma"]);
+    let legacy = obj(
+        json!({"finished": {"type": "integer", "description": "One of the account's finished umas by its #id (list_finished_umas): its G1 wins and parents come from the import; leave uma, g1_wins and parents out"}, "uma": {"type": "string"}, "g1_wins": wins, "parents": {"type": "array", "maxItems": 2, "items": ancestor}}),
+        &[],
+    );
     vec![
         // --- Read
         spec("get_account_summary", Read, "👤", "Read the account", "The account at a glance: profile, server, umas by stars and potential, cards by type and limit break, maxed SSRs, saved parents and plans, and the working plan in one line.", obj(json!({}), &[])),
@@ -289,8 +292,19 @@ fn build_registry() -> Vec<ToolSpec> {
             Read,
             "🌱",
             "Ranked legacy partners",
-            "The characters with the most base affinity to a trainee, from the game's relation tables, with the account's own umas marked (stars: 3★ or more passes on her unique as a green spark). With `with`, ranks a second legacy by its affinity to both the trainee and that first legacy. Base affinity only: grandparents and shared G1 wins add more (get_affinity).",
-            obj(json!({"trainee": {"type": "string"}, "with": {"type": "string", "description": "A legacy already chosen"}, "owned_only": {"type": "boolean"}, "top_n": {"type": "integer", "minimum": 1, "maximum": 30}}), &["trainee"]),
+            "The characters with the most base affinity to a trainee, from the game's relation tables, with the account's own umas marked (stars: 3★ or more passes on her unique as a green spark). With `with`, ranks a second legacy by its affinity to both the trainee and that first legacy. Base affinity only: grandparents and shared G1 wins add more (get_affinity). With `finished: true`, ranks the account's own finished umas instead, by their whole affinity as a legacy (their parents and G1 wins included), with their sparks.",
+            obj(json!({"trainee": {"type": "string"}, "with": {"type": "string", "description": "A legacy already chosen"}, "owned_only": {"type": "boolean"}, "finished": {"type": "boolean"}, "top_n": {"type": "integer", "minimum": 1, "maximum": 30}}), &["trainee"]),
+        ),
+        spec(
+            "list_finished_umas",
+            Read,
+            "🌱",
+            "Listed finished umas",
+            "The account's finished umas (veterans: the parents it can use), imported from UmaExtractor's data.json: #id, uma, rank, sparks by colour with stars (blue = stat, pink = aptitude, green = unique, white = skills, races and scenario), G1 wins and their own parents. Best rank first. Filter by uma name, by a spark's name (e.g. 'Turf', 'Speed', a skill), its colour and its minimum stars.",
+            obj(
+                json!({"uma": {"type": "string"}, "spark": {"type": "string"}, "kind": {"type": "string", "enum": ["blue", "pink", "green", "white", "race", "scenario"]}, "min_stars": {"type": "integer", "minimum": 1, "maximum": 3}, "top_n": {"type": "integer", "minimum": 1, "maximum": 60}}),
+                &[],
+            ),
         ),
         spec("list_notes", Read, "📝", "Listed notes", "List the project's markdown notes: insights.md (Claude's evidence-backed opinions), sources.md, plans/*.md (career plans), results/*.md (real results logs), account/*.md.", obj(json!({}), &[])),
         spec("read_note", Read, "📝", "Read a note", "Read one note file by its path from list_notes, e.g. insights.md, results/careers.md, or the sourced knowledge notes: knowledge/mechanics.md (race mechanics, Team Trials scoring, the CM format, sparks, Grand Concert), knowledge/racecourses.md (every CM course's layout and stamina by style) and knowledge/skills.md (skill advice, debuffs, post-race hints).", obj(json!({"path": {"type": "string"}}), &["path"])),
@@ -512,6 +526,8 @@ mod tests {
     fn every_tool_runs_headless() {
         let ctx = egui::Context::default();
         let (mut a, dir) = crate::onboarding::tests::scratch_app("agent-tools");
+        // Two made-up finished umas for list_finished_umas, rank_legacies and get_affinity.
+        std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/veterans_sample.json"), dir.join(crate::veterans::FILE)).unwrap();
         a.roster = crate::data::Roster::sample();
         let headers = a.result_headers(0);
         let log_fields: serde_json::Map<String, Value> = headers.iter().filter(|h| !h.starts_with("Date")).take(2).map(|h| (h.clone(), json!("from the agent test"))).collect();
@@ -531,7 +547,10 @@ mod tests {
             ("new_plan", json!({"goal": "Champions Meeting", "cm": "next", "trainee": "Oguri Cap [Starlight Beat]"})),
             ("recommend_trainees", json!({"top_n": 3})),
             ("get_affinity", json!({"trainee": "Oguri Cap", "legacies": [{"uma": "Silence Suzuka", "g1_wins": ["Arima Kinen", "Japan Cup"], "parents": [{"uma": "Mejiro McQueen", "g1_wins": ["Arima Kinen"]}]}, {"uma": "Gold Ship"}]})),
+            ("get_affinity", json!({"trainee": "Oguri Cap", "legacies": [{"finished": 7}, {"finished": 8}]})),
             ("rank_legacies", json!({"trainee": "Oguri Cap", "with": "Gold Ship", "top_n": 5})),
+            ("rank_legacies", json!({"trainee": "Oguri Cap", "finished": true, "top_n": 3})),
+            ("list_finished_umas", json!({"kind": "pink", "min_stars": 2})),
             ("set_plan", json!({"style": "Pace", "target_stats": [1200, 1000, 1000, 600, 1000], "ground": "Good", "meta_influence": "tie-break"})),
             ("get_plan", json!({})),
             ("set_deck", json!({"cards": ["Kitasan Black"], "friend": "none"})),

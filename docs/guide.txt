@@ -217,6 +217,18 @@ once, and the message that pops up has Undo. You can also edit the files in any 
 editor: keep the table columns as they are, and press Reload in the app.
 Each row's ID is the uma.guide ID of that uma or card.
 
+Your finished umas (the parents you can use) come from the game itself. On Windows, run
+UmaExtractor (github.com/xancia/UmaExtractor) with the game open on Enhance > Veteran List;
+on Linux, run `sudo python3 -I tools/read_veterans.py -o <your downloads folder>/data.json`
+(root's Python needs the msgpack package; with Nix, run sudo on a Python built with it).
+Then Settings > Profile > Import finished umas (or drop data.json on the window). The app
+lists each one in account\parents.md with its sparks, its parents and its G1 wins, and adds
+any uma you've trained but hadn't listed, or raises her stars or potential to what you trained
+her at. Each import replaces the last (the game's list is the truth); the previous one is kept
+in profiles\backups.
+Both tools only read the game's memory; reading another program's memory may be against the
+game's terms, so use them at your own judgment.
+
 
 Updating the game data
 ----------------------
