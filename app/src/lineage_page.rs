@@ -205,7 +205,12 @@ impl App {
                 ui.allocate_ui_with_layout(vec2(rest, h), egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_width(rest);
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                    egui::ScrollArea::vertical().id_salt("lineage_overview").auto_shrink([false, false]).show(ui, |ui| overview(self, ui));
+                    let mut sa = egui::ScrollArea::vertical().id_salt("lineage_overview").auto_shrink([false, false]);
+                    // UMALORD_SCROLL_OVERVIEW holds the overview pane scrolled down, for screenshots.
+                    if let Some(y) = std::env::var("UMALORD_SCROLL_OVERVIEW").ok().and_then(|v| v.parse::<f32>().ok()) {
+                        sa = sa.vertical_scroll_offset(y);
+                    }
+                    sa.show(ui, |ui| overview(self, ui));
                 });
             });
         } else {
@@ -333,11 +338,11 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Green, "564 Escapades", 0, Some(1), false, true);
                     let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
-                    ui.label(RichText::new(format!("Every runner should inherit it (community). {} of {runners} need a friend's Summer Gold Ship as a parent.", needs.len())).size(13.0));
-                    if ui.link(if open { "Hide" } else { "What to look for" }).clicked() {
-                        toggle = true;
-                    }
+                    ui.add(egui::Label::new(RichText::new(format!("{} of {runners} runners need a friend's Summer Gold Ship as a parent (every runner should inherit 564 Escapades, the community says).", needs.len())).size(13.0)).wrap());
                 });
+                if ui.link(if open { "Hide" } else { "What to look for" }).clicked() {
+                    toggle = true;
+                }
                 if open {
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
@@ -353,7 +358,7 @@ impl App {
                             ui.label(RichText::new(format!("→ {}", if partner.is_empty() { "a parent that keeps her targets at A" } else { partner.as_str() })).size(12.5).color(p.weak));
                         });
                     }
-                    ui.add(egui::Label::new(RichText::new("Need a new friend? Look for a trainer whose legacies include Summer Gold Ship with 564 Escapades as a green spark. Borrow her again for every career that uses her.").size(12.0).color(p.weak)).wrap());
+                    prose(ui, "Need a new friend? Look for a trainer whose legacies include Summer Gold Ship with 564 Escapades as a green spark. Borrow her again for every career that uses her.", 12.0, p.weak);
                 }
             });
             if toggle {
@@ -463,7 +468,7 @@ impl App {
             });
             let items: Vec<Who> = team.today.iter().map(|t| Who { uma: t.outfit, name: format!("#{} {}", t.vet, crate::parentage::uma_name(&self.kb, t.outfit)), note: t.share.map_or(String::new(), |s| format!("wins {:.0}%", s * 100.0)), note_color: pal(ui).weak, hover: None }).collect();
             self.who_flow(ui, &items);
-            ui.label(RichText::new("The best team from your finished umas as they are: their own stats, skills and aptitudes, raced in the simulator. The plan's gains are measured against it.").size(12.0).color(pal(ui).weak));
+            prose(ui, "The best team from your finished umas as they are: their own stats, skills and aptitudes, raced in the simulator. The plan's gains are measured against it.", 12.0, pal(ui).weak);
         });
     }
 
@@ -510,6 +515,11 @@ impl App {
                         toggle = Some(format!("runner:{k}"));
                     }
                 });
+                if let Some(f) = r.plan.friend
+                    && borrow_chip(ui, &self.kb, f, open.as_deref() == Some(&format!("runner:{k}")))
+                {
+                    toggle = Some(format!("runner:{k}"));
+                }
                 if let (Some(f), true) = (r.plan.friend, open.as_deref() == Some(&format!("runner:{k}"))) {
                     let (why, alts) = borrows.get(k).cloned().unwrap_or_default();
                     self.borrow_look_for(ui, f, why.as_deref(), &alts);
@@ -579,6 +589,11 @@ impl App {
                             }
                             if let Some(f) = q.friend
                                 && self.card_art(ui, f, 24.0, true).on_hover_text("Click: what to look for").clicked()
+                            {
+                                toggle = Some(format!("queue:{k}"));
+                            }
+                            if let Some(f) = q.friend
+                                && borrow_chip(ui, &self.kb, f, open.as_deref() == Some(&format!("queue:{k}")))
                             {
                                 toggle = Some(format!("queue:{k}"));
                             }
@@ -705,12 +720,10 @@ impl App {
                     });
                     // The borrowed card, and on request what to look for.
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add(egui::Label::new(RichText::new(format!("Borrow: {} [{}] (MLB)", f.uma, f.title)).size(12.5)).wrap());
-                            if ui.link("What to look for").clicked() {
-                                look_toggle = true;
-                            }
-                        });
+                        ui.add(egui::Label::new(RichText::new(format!("Borrow: {} [{}] (MLB)", f.uma, f.title)).size(12.5)).wrap());
+                        if ui.link(if look_open { "Hide what to look for" } else { "What to look for" }).clicked() {
+                            look_toggle = true;
+                        }
                         if look_open {
                             this.borrow_look_for(ui, f.id, b.friend_why.as_deref(), &b.friend_alts);
                         }
@@ -954,7 +967,7 @@ impl App {
                 }
             }
             ui.add_space(6.0);
-            ui.add(egui::Label::new(RichText::new("Need a new friend? Look for a trainer whose support card list shows this card at MLB.").size(12.0).color(p.weak)).wrap());
+            prose(ui, "Need a new friend? Look for a trainer whose support card list shows this card at MLB.", 12.0, p.weak);
         });
     }
 
@@ -1083,6 +1096,12 @@ fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: b
         crate::collection_kit::set_setting(ui.ctx(), "lineage_open", all);
     }
     st.show_body_unindented(ui, body);
+}
+
+/// The compact borrow: "Borrow · MLB · <uma> ▸", a link that opens what to look for.
+fn borrow_chip(ui: &mut egui::Ui, kb: &crate::knowledge::Knowledge, card: u32, open: bool) -> bool {
+    let name = kb.cards.get(&card).map_or(card.to_string(), |c| c.uma.clone());
+    ui.link(RichText::new(format!("Borrow · MLB · {name} {}", if open { "▾" } else { "▸" })).size(12.5)).on_hover_text("What to look for: the card, why, search text and fallbacks").clicked()
 }
 
 /// A paragraph, ragged right and no wider than about 80 characters.

@@ -333,7 +333,7 @@ impl App {
                         ui.painter().circle_stroke(c, d / 2.0 - 0.5, Stroke::new(1.0, p.border));
                     }
                     if k + 1 == unlucky {
-                        ui.painter().circle_stroke(c, d / 2.0 + 2.5, Stroke::new(1.5, p.text));
+                        ui.painter().circle_stroke(c, d / 2.0 + 2.5, Stroke::new(1.5, crate::lineage_kit::ink(p.warn, p.surface)));
                     }
                 }
             });
@@ -506,7 +506,20 @@ impl App {
                             }
                         }
                     }
-                    if ui.button("Borrow a friend's legacy").on_hover_text("What to look for among your friends' legacies").clicked() {
+                    let inv = this.parent_inventory();
+                    let who = crate::parentage::jobs::borrow_wish(&this.kb, &plan.goal, &plan.inventory(&this.kb, &inv)).filter(|w| w.possible).and_then(|w| {
+                        let n = w.charas.len();
+                        w.charas.first().and_then(|(c, _)| this.kb.umas.values().filter(|u| crate::affinity::chara(u.id) == *c).map(|u| u.id).min()).map(|u| (u, n))
+                    });
+                    if let Some((u, _)) = who {
+                        this.avatar(ui, u, 20.0);
+                    }
+                    let label = match who {
+                        Some((u, n)) if n > 1 => format!("Borrow a friend's legacy: {}, or {} others", this.kb.umas[&u].name, n.min(6) - 1),
+                        Some((u, _)) => format!("Borrow a friend's legacy: {}", this.kb.umas[&u].name),
+                        None => "Borrow a friend's legacy".to_string(),
+                    };
+                    if ui.button(label).on_hover_text("What to look for among your friends' legacies").clicked() {
                         this.lineage.runner.show_borrow = !this.lineage.runner.show_borrow;
                     }
                 });
@@ -607,24 +620,35 @@ impl App {
             }
             ui.add_space(4.0);
             let mut pick: Option<u32> = None;
-            row(ui, "Best characters", &mut |ui| {
-                for (rank, (c, aff)) in w.charas.iter().take(6).enumerate() {
-                    if let Some(u) = self.kb.umas.values().filter(|u| crate::affinity::chara(u.id) == *c).map(|u| u.id).min() {
-                        let chosen = self.lineage.runner.add_uma.is_some_and(|a| crate::affinity::chara(a) == *c);
+            // Ranked characters as whole chips, wrapped by measuring (a Frame can't wrap whole).
+            let chips: Vec<(usize, u32, String, u32)> = w.charas.iter().take(6).enumerate().filter_map(|(rank, (c, aff))| self.kb.umas.values().filter(|u| crate::affinity::chara(u.id) == *c).map(|u| u.id).min().map(|u| (rank, u, self.kb.umas[&u].name.clone(), *aff))).collect();
+            ui.label(RichText::new("Best characters").size(12.5).color(p.weak));
+            let max = ui.available_width();
+            let widths: Vec<f32> = chips.iter().map(|(_, _, name, _)| ui.painter().layout_no_wrap(name.clone(), egui::FontId::proportional(12.5), p.text).size().x + 64.0).collect();
+            let mut start = 0;
+            while start < chips.len() {
+                let (mut end, mut used) = (start, 0.0);
+                while end < chips.len() && (end == start || used + widths[end] <= max) {
+                    used += widths[end] + 8.0;
+                    end += 1;
+                }
+                ui.horizontal(|ui| {
+                    for (rank, u, name, aff) in &chips[start..end] {
+                        let chosen = self.lineage.runner.add_uma.is_some_and(|a| crate::affinity::chara(a) == crate::affinity::chara(*u));
                         let r = egui::Frame::new().fill(if chosen { crate::lineage_kit::tint(p.accent, p.surface, 0.18) } else { p.raised }).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin { left: 4, right: 10, top: 2, bottom: 2 }).show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(format!("{}", rank + 1)).size(11.5).color(p.weak));
-                                self.avatar(ui, u, 22.0);
-                                ui.label(RichText::new(self.kb.umas[&u].name.clone()).size(12.5));
+                                self.avatar(ui, *u, 22.0);
+                                ui.add(egui::Label::new(RichText::new(name).size(12.5)).wrap_mode(egui::TextWrapMode::Extend));
                             });
                         });
-                        let r = r.response.interact(egui::Sense::click()).on_hover_text(format!("Affinity {aff} with your runner and her partner. Click to fill the form below."));
-                        if r.clicked() {
-                            pick = Some(u);
+                        if r.response.interact(egui::Sense::click()).on_hover_text(format!("Affinity {aff} with your runner and her partner. Click to fill the form below.")).clicked() {
+                            pick = Some(*u);
                         }
                     }
-                }
-            });
+                });
+                start = end;
+            }
             if pick.is_some() {
                 self.lineage.runner.add_uma = pick;
             }
@@ -729,5 +753,10 @@ impl App {
 
 /// A paragraph, ragged right.
 fn prose(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(12.5)).wrap());
+    // About 80 characters a line at most.
+    let w = ui.available_width().min(580.0);
+    ui.allocate_ui_with_layout(vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(RichText::new(text).size(12.5)).wrap());
+    });
 }
