@@ -33,7 +33,7 @@ This folder is a personal knowledge base and decision log for the user's Uma Mus
 | `plans/<date>-<uma>-<purpose>.md` | Career plans, and the simulations behind them | The app's Career → Plan page writes them; Claude adds the simulation and recommendation |
 | `knowledge/UPDATING.md` | How every piece of the app's knowledge is refreshed: what updates itself, what `tools/update_knowledge.py` writes, and the research procedure for the curated files (`tt_meta.json`, the knowledge notes) | Claude, whenever a source or procedure changes |
 | `plans/parents.json` | The parent plan: one runner's goal, its steps (trainee, legacies, must-haves, nice-to-haves, odds) and how far it has got | The Lineage page, being designed (`parentage/track.rs`) |
-| `plans/career-modes.json` | How each finished career was run (Independent Training or manual), marked by the player because the import doesn't say | The Lineage page (`parentage/modes.rs`) |
+| `plans/career-modes.json` | How each finished career was run (Independent Training or manual), marked by the player: the finished-uma import (a memory reader's snapshot, `veterans.rs`) holds the uma, not how her career was played | The Lineage page (`parentage/modes.rs`) |
 | `results/*.md` | Real outcomes: careers, Team Trials, Champions Meeting, League of Heroes, sparks | The app's Career → Results page, or Claude logging what the user reports |
 | `insights.md` | Claude's current opinions, with the evidence and confidence for each | Claude |
 | `app/` | Rust desktop app (eframe/egui): roster, knowledge, planner, race simulator, results, notes, and Ask | Claude |

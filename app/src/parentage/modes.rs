@@ -1,5 +1,6 @@
 //! How each finished career was run: Independent Training (Global's 50-minute background
-//! career) or manual. The game's import doesn't say, so the player marks it, one tap at
+//! career) or manual. The finished-uma import (a memory reader's snapshot; the game has no
+//! export) holds the uma, not how her career was played, so the player marks it, one tap at
 //! check-off; unmarked careers take the default for what they were for (Independent Training
 //! for a parent step, manual for a runner). Kept in plans/career-modes.json by finished uma id.
 
