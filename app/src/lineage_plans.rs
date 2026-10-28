@@ -58,6 +58,8 @@ pub(crate) struct PlansUi {
     /// (one column).
     pub open_step: Option<(Which, String)>,
     pub steps_folded: Option<Which>,
+    /// The account's umas, support cards and finished umas, and when they were counted.
+    ready: Option<(std::time::Instant, [usize; 3])>,
 }
 
 /// How long worked-out notices stand (an import elsewhere shows within this).
@@ -126,10 +128,86 @@ impl App {
         }
     }
 
+    /// The account's umas, support cards and finished umas (counted every couple of seconds:
+    /// the finished umas are read from disk).
+    pub(crate) fn plan_ready(&mut self) -> [usize; 3] {
+        if let Some((t, n)) = self.lineage.p.ready.filter(|(t, _)| t.elapsed() < NOTICES_FOR) {
+            let _ = t;
+            return n;
+        }
+        let n = [self.roster.umas.len(), self.roster.cards.len(), self.veterans().len()];
+        self.lineage.p.ready = Some((std::time::Instant::now(), n));
+        n
+    }
+
+    /// Why a plan can't be made yet, if it can't.
+    pub(crate) fn plan_blocked(&mut self) -> Option<String> {
+        let [umas, cards, _] = self.plan_ready();
+        crate::parentage::saved::not_set_up(umas, cards)
+    }
+
+    /// Before any plan: the account must be set up (umas and cards), else a card says what to
+    /// do and planning stays off; with no finished umas, a note says plans are for a fresh
+    /// account. Returns whether planning is blocked.
+    pub(crate) fn setup_gate(&mut self, ui: &mut egui::Ui) -> bool {
+        let [umas, cards, vets] = self.plan_ready();
+        let p = pal(ui);
+        if let Some(why) = crate::parentage::saved::not_set_up(umas, cards) {
+            crate::ui_util::card(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(semibold("Set up your account first", size::LG));
+                ui.add_space(4.0);
+                prose(ui, &format!("{why} umaLord has {umas} uma{} and {cards} support card{} for this account so far.", if umas == 1 { "" } else { "s" }, if cards == 1 { "" } else { "s" }), 13.5, p.text);
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(crate::ui_util::primary_button(ui, "📝 Set up my collection", 13.5)).clicked() {
+                        self.open_setup(crate::onboarding::Step::Umas);
+                    }
+                    if ui.button("📥 Load a profile").on_hover_text("Switch to a saved account (a .umalord.json file).").clicked() {
+                        self.open_setup(crate::onboarding::Step::Import);
+                    }
+                });
+            });
+            ui.add_space(12.0);
+            return true;
+        }
+        if vets == 0 {
+            amber_frame().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(semibold("No finished umas imported: plans will be for a fresh account", 14.0));
+                prose(ui, "Finished umas are the umas whose careers you've completed; they race for you today and become parents. Without them every runner starts from scratch and every parent is planned from nothing, which only fits a brand-new account. If you have finished umas, import them first.", 13.0, p.text);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("🌱 Import finished umas").on_hover_text("Takes UmaExtractor's data.json from your Downloads folder (or drop it on the window).").clicked() {
+                        self.import_finished_from_downloads();
+                    }
+                });
+            });
+            ui.add_space(12.0);
+        }
+        false
+    }
+
+    /// Settings' "Import finished umas", from the Lineage page.
+    fn import_finished_from_downloads(&mut self) {
+        match crate::settings::user_dir("Downloads").map(|d| d.join("data.json")).filter(|p| p.is_file()) {
+            Some(path) => {
+                let r = self.import_veterans(&path);
+                self.lineage.p.ready = None;
+                self.lineage.p.notices.clear();
+                self.toast_flag(r.map_or_else(|e| (e, true), |m| (m, false)));
+            }
+            None => self.toast("No data.json in Downloads. Run UmaExtractor (or tools/read_veterans.py) on the game's Veteran List, then drop its data.json on the window.", ToastKind::Info),
+        }
+    }
+
     /// Make a plan (Create plan, Re-plan, Reset) on a worker. The only thing on the page that
-    /// simulates.
+    /// simulates. Refused until the account has its umas and support cards.
     pub(crate) fn plan_start(&mut self, ctx: &egui::Context, which: Which, choices: Choices) {
         if self.lineage.p.job.is_some() {
+            return;
+        }
+        if let Some(why) = self.plan_blocked() {
+            self.toast(why, ToastKind::Warn);
             return;
         }
         let root = self.root.clone();
@@ -271,6 +349,7 @@ impl App {
                 ui.label(RichText::new("Opening a plan shows it as saved. Nothing simulates until you choose Create plan, Re-plan or Reset.").size(13.0).color(p.weak));
             });
             ui.add_space(10.0);
+            self.setup_gate(ui);
             let wide = ui.available_width() >= 1000.0;
             self.lineage.p.level = wide;
             let cards: [fn(&mut App, &mut egui::Ui); 3] = [App::overview_cm, App::overview_tt, App::overview_runner];
@@ -477,7 +556,8 @@ impl App {
                     this.lineage.view = LineageView::Runner;
                 }
             } else {
-                if ui.add(crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_hover_text("Opens One runner, where you pick her and her goal.").clicked() {
+                let blocked = this.plan_blocked();
+                if ui.add_enabled(blocked.is_none(), crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_hover_text("Opens One runner, where you pick her and her goal.").on_disabled_hover_text(blocked.unwrap_or_default()).clicked() {
                     this.lineage.view = LineageView::Runner;
                 }
                 ui.label(RichText::new("pick her, then a few seconds").size(12.0).color(pal(ui).weak));
@@ -502,8 +582,9 @@ impl App {
             }
         } else {
             let ctx = ui.ctx().clone();
-            let busy = self.lineage.p.job.is_some();
-            if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_disabled_hover_text("Another plan is being made; wait for it to finish.").clicked() {
+            let blocked = self.plan_blocked();
+            let busy = self.lineage.p.job.is_some() || blocked.is_some();
+            if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 13.5)).on_disabled_hover_text(blocked.unwrap_or_else(|| "Another plan is being made; wait for it to finish.".into())).clicked() {
                 self.lineage.view = view;
                 self.plan_start(&ctx, which, Choices::default());
             }
@@ -552,6 +633,7 @@ impl App {
         let p = pal(ui);
         let ctx = ui.ctx().clone();
         self.plan_ended(ui, which);
+        let blocked = self.setup_gate(ui);
         crate::ui_util::card(ui, |ui| {
             ui.set_max_width(760.0);
             let (title, makes) = match which {
@@ -571,8 +653,8 @@ impl App {
             prose(ui, "It reads your umas, finished umas, support cards and the community meta. Nothing runs until you press Create plan.", 13.0, p.weak);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let busy = self.lineage.p.job.is_some();
-                if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 14.0)).on_disabled_hover_text("Another plan is being made; wait for it to finish.").clicked() {
+                let busy = self.lineage.p.job.is_some() || blocked;
+                if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, "Create plan", 14.0)).on_disabled_hover_text(if blocked { "Set up your account first: see above." } else { "Another plan is being made; wait for it to finish." }).clicked() {
                     self.plan_start(&ctx, which, Choices::default());
                 }
                 ui.label(RichText::new(format!("takes {}", how_long(which))).size(12.5).color(p.weak));
@@ -643,6 +725,9 @@ impl App {
                         ui.label(semibold(format!("{} plan", label(which)), size::MD));
                         if !notices.is_empty() {
                             pill(ui, "⚠ Changed since", p.warn);
+                        }
+                        if plan.basis.vets.is_empty() {
+                            crate::ui_util::pill(ui, RichText::new("Fresh account").size(12.0).color(p.text), AMBER.gamma_multiply(0.25), egui::Stroke::new(1.0, AMBER.gamma_multiply(0.7))).on_hover_text(crate::parentage::saved::FRESH);
                         }
                     });
                     let (done, total) = plan.progress();
@@ -1021,5 +1106,33 @@ fn stage_list(ui: &mut egui::Ui, stages: &[Stage], live: bool, to_come: &[&str])
                 ui.vertical(|ui| lines(ui));
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A brand-new account can't start a plan: nothing runs, and a toast says to set it up.
+    #[test]
+    fn planning_waits_for_the_account() {
+        let (mut a, dir) = crate::onboarding::tests::scratch_app("plan-gate");
+        let ctx = egui::Context::default();
+        a.plan_start(&ctx, Which::Tt, Choices::default());
+        assert!(a.lineage.p.job.is_none(), "a plan started on an empty account");
+        assert!(a.pending_toasts.borrow().iter().any(|(t, ..)| t.starts_with("Add the umas and support cards")));
+        // The planner refuses too, whoever calls it.
+        assert!(a.make_tt_plan(&Choices::default()).is_err_and(|e| e.starts_with("Add the umas and support cards")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_up_means_umas_and_cards() {
+        use crate::parentage::saved::not_set_up;
+        assert!(not_set_up(0, 0).is_some_and(|w| w.contains("umas and support cards")));
+        assert!(not_set_up(0, 5).is_some_and(|w| w.starts_with("Add the umas you own")));
+        assert!(not_set_up(5, 0).is_some_and(|w| w.starts_with("Add the support cards")));
+        // No finished umas doesn't block: it's a fresh account.
+        assert_eq!(not_set_up(5, 5), None);
     }
 }

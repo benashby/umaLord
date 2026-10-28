@@ -454,6 +454,19 @@ pub fn stamp() -> String {
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}")
 }
 
+/// Why a plan can't be made yet: the account has no umas or no support cards in umaLord.
+pub fn not_set_up(umas: usize, cards: usize) -> Option<String> {
+    match (umas, cards) {
+        (0, 0) => Some("Add the umas and support cards you own first (Settings → Profile → Set up my collection, or load a profile): a plan is built from them.".into()),
+        (0, _) => Some("Add the umas you own first (Settings → Profile → Set up my collection): a plan picks its runners and parents from them.".into()),
+        (_, 0) => Some("Add the support cards you own first (Settings → Profile → Set up my collection): every career's deck is built from them.".into()),
+        _ => None,
+    }
+}
+
+/// What a plan says when the account has no finished umas: it's planned as a fresh account.
+pub const FRESH: &str = "No finished umas are imported, so this is planned as a fresh account: every runner starts from scratch and every parent career is planned from nothing.";
+
 impl App {
     /// What a plan made now would be made from.
     pub(crate) fn plan_basis(&self) -> Basis {
@@ -467,8 +480,14 @@ impl App {
     /// Runs the simulator; reports through `progress` when a build set it.
     pub(crate) fn make_cm_plan(&mut self, preset: &EventPreset, choices: &Choices) -> Result<TeamPlan, String> {
         self.stage("Reading your account")?;
+        if let Some(why) = not_set_up(self.roster.umas.len(), self.roster.cards.len()) {
+            return Err(why);
+        }
         let basis = self.plan_basis();
         let inv = self.parent_inventory();
+        if inv.parents.is_empty() {
+            self.note(FRESH);
+        }
         self.note(format!(
             "{} umas, {} finished umas, {} support cards; meta sheet read {}.",
             self.roster.umas.len(),
@@ -522,8 +541,14 @@ impl App {
     /// team most first, then the weakest runners' (parent careers before their own).
     pub(crate) fn make_tt_plan(&mut self, choices: &Choices) -> Result<TeamPlan, String> {
         self.stage("Reading your account")?;
+        if let Some(why) = not_set_up(self.roster.umas.len(), self.roster.cards.len()) {
+            return Err(why);
+        }
         let basis = self.plan_basis();
         let inv = self.parent_inventory();
+        if inv.parents.is_empty() {
+            self.note(FRESH);
+        }
         self.note(format!(
             "{} umas, {} finished umas, {} support cards; Team Trials meta read {}.",
             self.roster.umas.len(),
@@ -565,7 +590,8 @@ impl App {
             let what_for = match (b.replaces, own) {
                 (Some(old), _) => format!("Replace {old_name} in {race}: {old_name}'s unique skill fires unreliably.", old_name = super::short_name(&self.kb, old)),
                 (None, false) => parent_for(&self.kb, b, runner, Some(&race)),
-                (None, true) => format!("Run her again for {race}: she scores lowest on the team, so a better run raises it most."),
+                (None, true) if vets.iter().any(|v| crate::affinity::chara(v.card_id) == crate::affinity::chara(b.trainee)) => format!("Run her again for {race}: she scores lowest on the team, so a better run raises it most."),
+                (None, true) => format!("Train her first for {race}: she scores lowest on the team, so her career raises it most."),
             };
             careers.push(Career { key, label: tt_label(&self.kb, b, &race), brief: b.clone(), own, race: Some(race.clone()), what_for, usually: usually(if own { None } else { b.p }), ..Default::default() });
         }

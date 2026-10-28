@@ -244,6 +244,11 @@ impl App {
                     v
                 }
             };
+            let mut spans = spans;
+            if plan.basis.vets.is_empty() {
+                spans.push(Span::t(" "));
+                spans.push(Span::t("It's planned for a fresh account: no finished umas were imported.").colored(p.warn));
+            }
             rich(ui, &spans, 15.0, crate::lineage_page::PROSE_W + 80.0);
         });
     }

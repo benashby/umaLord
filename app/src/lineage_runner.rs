@@ -45,6 +45,10 @@ pub(crate) struct RunnerState {
 
 impl App {
     pub(crate) fn lineage_runner(&mut self, ui: &mut egui::Ui) {
+        // A runner's plan is built from the account too: set it up first.
+        if self.lineage.runner.plan.is_none() && self.setup_gate(ui) {
+            return;
+        }
         if !self.lineage.runner.loaded {
             self.lineage.runner.loaded = true;
             self.lineage.runner.plan = self.root.as_deref().and_then(track::load);
