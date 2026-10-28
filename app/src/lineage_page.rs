@@ -284,12 +284,14 @@ impl App {
                             .map(|s| {
                                 let tag = if today_names.contains(&s.trainee) { "as today" } else { "new career" };
                                 let shaky = s.notes.iter().any(|n| n.contains("unreliably"));
+                                let replaced_by = next.as_ref().filter(|b| b.replaces == Some(s.trainee)).map(|b| short_name(&self.kb, b.trainee));
                                 let note = match (s.ace, shaky) {
+                                    _ if replaced_by.is_some() => format!("⚠ to be replaced by {} (next career)", replaced_by.unwrap_or_default()),
                                     (_, true) => format!("⚠ unreliable unique · {tag}"),
                                     (true, _) => format!("★ Ace · {tag}"),
                                     _ => tag.to_string(),
                                 };
-                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky { p.warn } else if s.ace { p.gold } else { p.weak } }
+                                Who { uma: s.trainee, name: short_name(&self.kb, s.trainee), note, note_color: if shaky || note_is_replace(&s.trainee, &next) { p.warn } else if s.ace { p.gold } else { p.weak } }
                             })
                             .collect();
                         self.who_flow(ui, &items);
@@ -310,10 +312,13 @@ impl App {
                             plan_ui(ui);
                         });
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match row.gain {
-                        Some(g) => _ = ui.label(semibold(format!("{}{}", if g >= 0.0 { "+" } else { "" }, thousands(g)), 15.0).color(if g >= 0.0 { p.good } else { p.warn })),
-                        None => _ = ui.label(RichText::new("—").size(15.0).color(p.weak)),
-                    });
+                    // A fixed cell: a layout here would take the whole page's height.
+                    let (cell, _) = ui.allocate_exact_size(vec2(ui.available_width().max(gain_w), 24.0), Sense::hover());
+                    let (text, color) = match row.gain {
+                        Some(g) => (format!("{}{}", if g >= 0.0 { "+" } else { "" }, thousands(g)), if g >= 0.0 { p.good } else { p.warn }),
+                        None => ("—".to_string(), p.weak),
+                    };
+                    ui.painter().text(cell.right_center(), Align2::RIGHT_CENTER, text, FontId::new(15.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), color);
                 });
             }
             ui.separator();
@@ -354,7 +359,8 @@ impl App {
                                 pill(ui, "★ Ace", pal(ui).gold);
                             }
                         });
-                        ui.label(RichText::new(format!("{}{}", r.style.label(), if r.meta_pick { " · the sheet's pick" } else { "" })).size(12.5).color(pal(ui).weak));
+                        let today = team.today.iter().find(|t| t.outfit == r.trainee).map(|t| format!(" · #{} as today", t.vet)).unwrap_or_default();
+                        ui.label(RichText::new(format!("{}{}{today}", r.style.label(), if r.meta_pick { " · the sheet's pick" } else { "" })).size(12.5).color(pal(ui).weak));
                     });
                 });
                 egui::Frame::new().fill(pal(ui).raised).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
@@ -403,7 +409,7 @@ impl App {
         crate::ui_util::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(semibold("Parent queue", 15.5));
-                ui.label(RichText::new(format!("{} step{} · {} careers there's time for before the CM", queue.len(), if queue.len() == 1 { "" } else { "s" }, team.budget.round())).size(12.5).color(pal(ui).weak));
+                ui.label(RichText::new(format!("{} step{} · time for about {} careers before the CM", queue.len(), if queue.len() == 1 { "" } else { "s" }, team.budget.round())).size(12.5).color(pal(ui).weak));
             });
             if queue.is_empty() {
                 ui.label(RichText::new("No parent careers needed: train the three.").color(pal(ui).weak));
@@ -501,16 +507,8 @@ impl App {
                     if b.legacies.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&b.parents).size(13.0)).wrap());
                     } else {
-                        ui.horizontal_wrapped(|ui| {
-                            for (id, uma) in &b.legacies {
-                                egui::Frame::new().fill(p.raised).corner_radius(CornerRadius::same(16)).inner_margin(egui::Margin { left: 4, right: 10, top: 3, bottom: 3 }).show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        this.avatar(ui, *uma, 24.0);
-                                        ui.label(RichText::new(format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma))).size(12.5));
-                                    });
-                                });
-                            }
-                        });
+                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak }).collect();
+                        this.who_flow(ui, &items);
                     }
                 });
                 label_row(ui, "SCENARIO", |ui| {
@@ -647,6 +645,9 @@ impl App {
                 }
                 _ => {
                     ui.label(RichText::new("AGENDA · extra races, win chance").size(11.5).strong().color(p.weak));
+                    if b.agenda.is_empty() {
+                        ui.label(RichText::new("No extra races needed: leave the agenda empty.").size(12.5));
+                    }
                     for (name, grades, chance) in &b.agenda {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(name).size(12.5));
@@ -838,6 +839,10 @@ fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
     egui::Frame::new().fill(color.gamma_multiply(0.16)).stroke(Stroke::new(1.0, color.gamma_multiply(0.55))).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(8, 2)).show(ui, |ui| {
         ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap_mode(egui::TextWrapMode::Extend));
     });
+}
+
+fn note_is_replace(uma: &u32, next: &Option<Brief>) -> bool {
+    next.as_ref().is_some_and(|b| b.replaces == Some(*uma))
 }
 
 /// An uma's name without the outfit ("Curren Chan"); the outfit shows on hover of her avatar.

@@ -57,6 +57,8 @@ pub struct Brief {
     /// A parent step's number (from 1) and the runner it's for.
     pub step: Option<usize>,
     pub for_runner: Option<u32>,
+    /// The runner this career's uma would replace on the team, if any.
+    pub replaces: Option<u32>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -223,6 +225,7 @@ impl App {
             focus: Some(if run.stat_aims.contains(&1) { "Stamina" } else { "Balanced" }.to_string()),
             step: Some(step + 1),
             for_runner: Some(goal.runner),
+            replaces: None,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -273,6 +276,7 @@ impl App {
             focus: Some(focus(plan.target[1]).to_string()),
             step: None,
             for_runner: None,
+            replaces: None,
             mode: "Manual career".into(),
             setup,
             why,
@@ -373,6 +377,7 @@ impl App {
                     .unwrap_or_else(|| "any two legacies (yours or a friend's)".into());
                 let mut b = self.runner_brief(format!("Her own career for Team Trials ({}), to replace {replaced}, whose unique fires unreliably.", row.name), &plan, Some((plan.target[1], row.name.to_string())), parents);
                 b.legacies = legacies_of(best.as_ref(), inv);
+                b.replaces = Some(s.trainee);
                 return Some(b);
             }
         }
