@@ -8,7 +8,7 @@ use crate::knowledge::Knowledge;
 use crate::lineage::over_both;
 
 /// One lineage scored for the goal.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct Lineage {
     /// Indices into the parents scored.
     pub legacies: [usize; 2],

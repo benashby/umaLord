@@ -22,6 +22,7 @@ mod knowledge;
 mod lineage;
 mod lineage_kit;
 mod lineage_page;
+mod lineage_plans;
 mod lineage_runner;
 mod live;
 mod meta;
@@ -412,8 +413,12 @@ mod tests {
         }
         // Lineage: each view's team builds on a worker; wait for it, then time steady frames.
         a.tab = Tab::Lineage;
-        for view in [lineage_page::LineageView::Cm, lineage_page::LineageView::Tt, lineage_page::LineageView::Runner] {
+        for view in [lineage_page::LineageView::Overview, lineage_page::LineageView::Cm, lineage_page::LineageView::Tt, lineage_page::LineageView::Runner] {
             a.lineage.view = view;
+            // Opening a view never builds: make its plan, as Create plan would.
+            if let Some(which) = a.view_which() {
+                a.plan_start(&ctx, which, Default::default());
+            }
             let start = std::time::Instant::now();
             let mut first = 0.0;
             for k in 0..6000 {
@@ -422,16 +427,15 @@ mod tests {
                 if k == 0 {
                     first = t.elapsed().as_secs_f64() * 1e3;
                 }
-                if !a.lineage_busy(f64::INFINITY) && a.lineage.job.is_none() && k > 2 {
+                if !a.lineage_busy(f64::INFINITY) && a.lineage.p.job.is_none() && k > 2 {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             let built = start.elapsed().as_secs_f64();
-            let failed = match view {
-                lineage_page::LineageView::Cm => a.lineage.cm_built.as_ref().and_then(|r| r.as_ref().err()).cloned(),
-                lineage_page::LineageView::Tt => a.lineage.tt_built.as_ref().and_then(|r| r.as_ref().err()).cloned(),
-                lineage_page::LineageView::Runner => None,
+            let failed = match &a.lineage.p.ended {
+                Some(lineage_plans::Ended::Failed(_, e, _)) => Some(e.clone()),
+                _ => None,
             };
             if let Some(e) = failed {
                 eprintln!("  ({view:?} didn't build here: {e}; set UMALORD_ROOT to an account to time a real team)");
@@ -763,6 +767,8 @@ pub(crate) struct App {
     pub live: live::LiveState,
     /// The Lineage page: its view and the teams the planner built.
     pub lineage: lineage_page::LineageState,
+    /// A team plan being made on this (headless) app: its stages so far and the Cancel flag.
+    pub progress: Option<parentage::progress::Progress>,
     /// The weekly game-data pack (`datapack.rs`): the check in flight, and what the last one said.
     pub pack: Option<std::sync::mpsc::Receiver<Result<datapack::Outcome, String>>>,
     pub pack_status: Option<String>,
@@ -884,6 +890,7 @@ impl App {
             settings: Default::default(),
             live: Default::default(),
             lineage: Default::default(),
+            progress: None,
             pack: None,
             pack_status: None,
             pack_tried: false,
@@ -921,9 +928,10 @@ impl App {
         // UMALORD_LOOK=<key> opens a borrowed card's "What to look for" (runner:0, queue:0, card:<outfit>).
         app.lineage.look_for = env("UMALORD_LOOK");
         app.lineage.view = match env("UMALORD_TAB").as_deref() {
+            Some("lineage-cm") => lineage_page::LineageView::Cm,
             Some("lineage-tt") => lineage_page::LineageView::Tt,
             Some("lineage-runner") => lineage_page::LineageView::Runner,
-            _ => lineage_page::LineageView::Cm,
+            _ => lineage_page::LineageView::Overview,
         };
         app.career_tab = match env("UMALORD_TAB").as_deref() {
             Some("sim") => CareerTab::Race,

@@ -17,7 +17,7 @@ use crate::knowledge::{Knowledge, Style, grade_rank};
 use crate::tab_planner::{Plan, Purpose};
 
 /// One career, ready to run.
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 pub struct Brief {
     /// What it's for, in a line.
     pub why: String,
@@ -316,7 +316,7 @@ impl App {
 
 /// The brief as text: "What to do next".
 /// A lineage's two legacies as (finished uma id, outfit), for the page's avatar chips.
-fn legacies_of(l: Option<&super::score::Lineage>, inv: &Inventory) -> Vec<(u64, u32)> {
+pub(crate) fn legacies_of(l: Option<&super::score::Lineage>, inv: &Inventory) -> Vec<(u64, u32)> {
     l.map(|l| l.legacies.iter().filter_map(|i| inv.parents.get(*i)).map(|p| (p.id, p.uma)).collect()).unwrap_or_default()
 }
 

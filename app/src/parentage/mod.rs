@@ -16,7 +16,9 @@ pub mod brief;
 pub mod jobs;
 pub mod modes;
 pub mod outcome;
+pub mod progress;
 pub mod score;
+pub mod saved;
 pub mod text;
 pub mod track;
 pub mod tt;
@@ -231,6 +233,25 @@ pub fn is_borrowed(id: u64) -> bool {
 /// "Oguri Cap [Starlight Beat]", or the id when the game data doesn't know it.
 pub fn uma_name(kb: &Knowledge, uma: u32) -> String {
     kb.umas.get(&uma).map_or_else(|| format!("uma {uma}"), |u| format!("{} [{}]", u.name, u.outfit))
+}
+
+/// Umas by character name, with the outfit only where two of the list share a character:
+/// "Taiki Shuttle, Curren Chan [Fille Éclair], Curren Chan [Ma Chérie of the New Moon]".
+pub fn short_names(kb: &Knowledge, umas: &[u32]) -> Vec<String> {
+    umas.iter()
+        .map(|u| {
+            let twin = umas.iter().any(|o| o != u && crate::affinity::chara(*o) == crate::affinity::chara(*u));
+            match kb.umas.get(u) {
+                Some(info) if !twin => info.name.clone(),
+                _ => uma_name(kb, *u),
+            }
+        })
+        .collect()
+}
+
+/// One uma by character name, for a sentence that names her alone.
+pub fn short_name(kb: &Knowledge, uma: u32) -> String {
+    kb.umas.get(&uma).map_or_else(|| uma_name(kb, uma), |u| u.name.clone())
 }
 
 /// "#812 Haru Urara [Bestest Prize ♪]", or a planned parent's trainee.

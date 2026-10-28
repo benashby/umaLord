@@ -14,7 +14,7 @@ use crate::knowledge::{EventPreset, Style};
 use crate::tab_planner::Plan;
 
 /// One runner of the team.
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Runner {
     pub trainee: u32,
     pub style: Style,
@@ -38,7 +38,7 @@ pub struct Runner {
 }
 
 /// The team for one Champions Meeting.
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct CmTeam {
     pub event: EventPreset,
     pub runners: Vec<Runner>,
@@ -176,6 +176,13 @@ impl App {
         let mut runners: Vec<Runner> = Vec::new();
         let mut today_team = Vec::new();
         let styles = ranked_styles(self, preset);
+        self.stage("Choosing runners and planning their parents")?;
+        let ranked = |n: usize| styles.iter().take(n).map(|s| s.label()).collect::<Vec<_>>().join(", ");
+        if self.kb.pvp_meta.as_ref().is_some_and(|m| m.events.iter().any(|e| e.series == "CM" && e.number == preset.id)) {
+            self.note(format!("The meta sheet ranks {} best for CM {} ({}): one runner each.", ranked(3), preset.id, preset.name));
+        } else {
+            self.note(format!("The meta sheet has nothing for CM {} yet, so every style is tried: {}.", preset.id, ranked(4)));
+        }
         let out = |t: u32, runners: &[Runner]| opts.exclude.contains(&crate::affinity::chara(t)) || runners.iter().any(|r| crate::affinity::chara(r.trainee) == crate::affinity::chara(t));
         // The player's pinned runners first, each in the sheet's best-ranked style she has B or
         // better in.
@@ -189,6 +196,7 @@ impl App {
             let meta: Vec<u32> = self.plan_meta_trainees();
             let (mut r, _) = self.cm_runner(preset, style, t, inv, &meta);
             r.notes.insert(0, "Pinned by you.".into());
+            self.note(format!("{} as {}: pinned by you.", super::uma_name(&self.kb, t), style.article()));
             runners.push(r);
         }
         // One runner per style the sheet ranks best (a pinned runner's style counts), then fill
@@ -202,15 +210,30 @@ impl App {
             let meta: Vec<u32> = self.plan_meta_trainees();
             let candidates: Vec<u32> = self.trainee_candidates().into_iter().filter(|t| !out(*t, &runners)).take(4).collect();
             let mut picked: Option<Runner> = None;
+            let mut passed = Vec::new();
             for t in candidates {
+                self.check_cancel()?;
                 let (r, reachable) = self.cm_runner(preset, style, t, inv, &meta);
                 if reachable {
                     picked = Some(r);
                     break;
                 }
+                passed.push(super::uma_name(&self.kb, t));
                 picked.get_or_insert(r);
             }
             if let Some(r) = picked {
+                let why = if r.meta_pick { "the sheet's pick" } else { "your best fit for the course" };
+                let lineage = if r.parents.need.iter().all(|n| n.1 == 0) {
+                    "she starts at A on her own".to_string()
+                } else if r.parents.now.as_ref().is_some_and(super::score::Lineage::meets) {
+                    "her finished umas already start her at A".to_string()
+                } else if r.parents.steps.is_empty() {
+                    "no parent route under the cap".to_string()
+                } else {
+                    format!("{} parent career{} first, about {:.0} careers", r.parents.steps.len(), if r.parents.steps.len() == 1 { "" } else { "s" }, r.parents.careers())
+                };
+                let skipped = if passed.is_empty() { String::new() } else { format!(" ({} passed over: no reachable lineage)", passed.join(", ")) };
+                self.note(format!("{} as {}: {why}; {lineage}{skipped}.", super::uma_name(&self.kb, r.trainee), style.article()));
                 runners.push(r);
             }
         }
@@ -218,6 +241,7 @@ impl App {
             return Err("No owned uma can run this CM's course.".into());
         }
         // Each runner's career plan: deck with a borrowed MLB friend card, the sheet's stats, skills.
+        self.stage("Decks and skills")?;
         let meta_stats = self.kb.pvp_meta.as_ref().and_then(|m| m.events.iter().find(|e| e.series == "CM" && e.number == preset.id)).map(|e| e.stats.clone()).unwrap_or_default();
         for r in &mut runners {
             let mut plan = self.cm_plan(preset, r.style, Some(r.trainee));
@@ -227,8 +251,12 @@ impl App {
             self.recommend_deck(true);
             self.auto_pick_skills();
             r.plan = self.planner.plan.clone();
+            let borrow = r.plan.friend.and_then(|c| self.kb.cards.get(&c)).map_or("no borrow".into(), |c| format!("borrow {} [{}] (MLB)", c.uma, c.title));
+            self.note(format!("{}: {borrow}, {} skills to target.", super::uma_name(&self.kb, r.trainee), r.plan.skills.len()));
+            self.check_cancel()?;
         }
         // Race each pair; a runner's share is her average win share against her teammates.
+        self.stage("Racing the runners head to head")?;
         if let Some(data) = self.sim_data.clone() {
             let mut builds = Vec::new();
             for r in &runners {
@@ -256,6 +284,10 @@ impl App {
                         let res = crate::sim::run::run_comparison(&data, &course, &race, a, b, &sim_opts, true, false, None);
                         let runs = res.gaps.len().max(1) as f64;
                         let b_share = res.gaps.iter().filter(|g| **g > 0.0).count() as f64 / runs;
+                        let (w, l, pct) = if b_share > 0.5 { (j, i, b_share) } else { (i, j, 1.0 - b_share) };
+                        let names = super::short_names(&self.kb, &[runners[w].trainee, runners[l].trainee]);
+                        self.note(format!("{} beat {} in {:.0}% of {runs:.0} races.", names[0], names[1], pct * 100.0));
+                        self.check_cancel()?;
                         wins[i].push((1.0 - b_share, runs));
                         wins[j].push((b_share, runs));
                         for (k, u) in [(i, &res.umas[0]), (j, &res.umas[1])] {
@@ -285,6 +317,7 @@ impl App {
                 }
                 // What the player can field today: their finished umas as they are, raced against
                 // each other, then each planned runner against today's best.
+                self.stage("Comparing with today's team")?;
                 let vets = self.veterans();
                 let (surface, distance) = (runners[0].plan.surface, runners[0].plan.distance);
                 let picks = super::baseline::candidates(&vets, surface, distance, &[], 4);
@@ -317,7 +350,16 @@ impl App {
                         }
                     }
                 }
+                if let Some(t) = today.first() {
+                    self.note(format!("Today's best: #{} {}.", t.0.vet, super::short_name(&self.kb, t.0.outfit)));
+                    for r in &runners {
+                        if let Some(v) = r.vs_today {
+                            self.note(format!("Planned {} beats her in {:.0}% of races.", super::short_name(&self.kb, r.trainee), v * 100.0));
+                        }
+                    }
+                }
                 if today.is_empty() {
+                    self.note("None of your finished umas can run this course yet, so there's no team today to compare with.");
                     notes.push("None of your finished umas can run this course (B or better in its surface and distance), so there's no team today to compare with.".into());
                 }
                 today_team = today.into_iter().map(|t| t.0).collect();
@@ -326,11 +368,13 @@ impl App {
             }
         }
         // One queue of parent careers for the three, harder first: misses show up early.
+        self.stage("Ordering the parent careers")?;
         let mut queue: Vec<(usize, Run)> = runners.iter().enumerate().flat_map(|(i, r)| r.parents.steps.iter().map(move |s| (i, s.clone()))).collect();
         queue.sort_by(|a, b| b.1.careers().total_cmp(&a.1.careers()));
         let needed: f64 = queue.iter().map(|q| q.1.careers()).fold(0.0, |a, b| a + b);
         let days_left = crate::tab_planner::days_apart(&preset.date, &crate::ui_util::today()).max(0);
         let budget = (days_left as f64 * opts.careers_per_day - opts.held_back * runners.len() as f64).max(0.0);
+        self.note(format!("{} parent career{}, about {needed:.0} careers expected, hardest first so a miss shows early; time for about {budget:.0} in the {days_left} days before {}.", queue.len(), if queue.len() == 1 { "" } else { "s" }, preset.name));
         for r in &runners {
             if let Some((surv, spurt)) = r.stamina.filter(|s| s.0 < 0.9 || s.1 < 0.5) {
                 notes.push(format!(

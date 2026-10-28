@@ -36,6 +36,14 @@ pub enum Style {
     End,
 }
 
+impl Style {
+    /// With its article, for a sentence: "a Pace Chaser", "an End Closer".
+    pub fn article(self) -> String {
+        let l = self.label();
+        format!("{} {l}", if l.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
+    }
+}
+
 impl Surface {
     pub const ALL: [Surface; 2] = [Surface::Turf, Surface::Dirt];
     pub fn label(self) -> &'static str {

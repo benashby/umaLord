@@ -202,6 +202,20 @@ pub fn tint(color: Color32, base: Color32, a: f32) -> Color32 {
     base.lerp_to_gamma(Color32::from_rgb(color.r(), color.g(), color.b()), a)
 }
 
+/// A whole number with thousands separators: 23513 → "23,513".
+pub fn thousands(v: f64) -> String {
+    let n = v.round() as i64;
+    let s = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// A finished uma in today's team.
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Today {
     /// The game's id for this finished uma, shown as "#id".
     pub vet: u64,

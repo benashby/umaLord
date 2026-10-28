@@ -137,7 +137,7 @@ pub struct TtPins {
 const POSITIONING: f64 = 3000.0;
 
 /// One runner in a race's team.
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Slot {
     pub trainee: u32,
     pub style: Style,
@@ -158,6 +158,16 @@ pub struct Slot {
     pub ready: bool,
 }
 
+/// A race's name, one of `ROWS`. An alias so serde doesn't take the `&'static str` as borrowed
+/// from the saved text.
+pub type RowName = &'static str;
+
+/// A saved race's name, as the `ROWS` entry it names (an unknown name reads as the first).
+fn row_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    let name = <String as serde::Deserialize>::deserialize(d)?;
+    Ok(ROWS.iter().find(|r| r.0 == name).map_or(ROWS[0].0, |r| r.0))
+}
+
 /// A race's surface and distance.
 pub fn race_grades(race: &str) -> (Surface, Distance) {
     let i = ROWS.iter().position(|r| r.0 == race).unwrap_or(0);
@@ -173,9 +183,10 @@ impl Slot {
     }
 }
 
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Row {
-    pub name: &'static str,
+    #[serde(deserialize_with = "row_name")]
+    pub name: RowName,
     pub slots: Vec<Slot>,
     /// Styles on the team (each adds the positioning bonus).
     pub styles: usize,
@@ -186,7 +197,7 @@ pub struct Row {
     pub notes: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 pub struct TtTeam {
     pub rows: Vec<Row>,
     pub total: f64,
@@ -357,6 +368,8 @@ impl App {
         let data = self.sim_data.clone().ok_or("The simulator's data isn't loaded.")?;
         let mut notes = Vec::new();
         let meta = self.tt_meta();
+        self.stage("Choosing candidates for each race")?;
+        self.note(format!("The community's Team Trials picks (read {}) first, then your umas with A or B in each race.", meta.read));
         // Candidates per race: the meta's usual runners for it first (in its order), then A in
         // its surface and distance, then B (parents can lift a B). Her style is the meta's
         // preferred one where her grade there is B or better, else her best.
@@ -384,8 +397,12 @@ impl App {
             // Pinned runners first, whatever the meta says.
             let pinned = |id: u32| pins.pin.iter().any(|(t, r)| *t == id && r == name);
             list.sort_by(|a, b| pinned(b.0).cmp(&pinned(a.0)).then(a.3.0.cmp(&b.3.0)).then(b.3.1.cmp(&a.3.1)).then(b.2.cmp(&a.2)).then((b.3.2, b.3.3, b.3.4).cmp(&(a.3.2, a.3.3, a.3.4))));
+            let ids: Vec<u32> = list.iter().take(6).map(|c| c.0).collect();
+            let names = super::short_names(&self.kb, &ids);
+            self.note(format!("{name}: {}.", if names.is_empty() { "none of your umas can run it".to_string() } else { names.join(", ") }));
             cands.push(list.into_iter().take(6).map(|c| (c.0, c.1, c.2)).collect());
         }
+        self.stage("Racing each race's candidates")?;
         // Build and race each race's candidates head to head; score each.
         let mut scored: Vec<Vec<Slot>> = Vec::new();
         for (row, list) in cands.iter().enumerate() {
@@ -393,6 +410,7 @@ impl App {
             let mut builds = Vec::new();
             let mut slots = Vec::new();
             for &(t, style, natural) in list {
+                self.check_cancel()?;
                 self.planner.plan = self.tt_plan(&meta, row, t, style, course_id);
                 self.recommend_deck(true);
                 // The meta's borrow for this race and style, when one fits the deck.
@@ -423,6 +441,12 @@ impl App {
             let race = crate::sim::run::race_params(1, 1, 1, 2, None);
             let opts = crate::sim::run::SimOptions { samples: races, seed: 12345.0, ..Default::default() };
             let raced = super::baseline::race_pool(&data, &course, &race, &builds, &opts);
+            let mut by_share: Vec<(f64, u32)> = slots.iter().zip(&raced).map(|(s, r)| (r.0.unwrap_or(0.0), s.trainee)).collect();
+            by_share.sort_by(|a, b| b.0.total_cmp(&a.0));
+            if by_share.len() > 1 {
+                let names = super::short_names(&self.kb, &by_share.iter().map(|x| x.1).collect::<Vec<_>>());
+                self.note(format!("{}: {} wins {:.0}% of {races} races against the others; {} next at {:.0}%.", ROWS[row].0, names[0], by_share[0].0 * 100.0, names[1], by_share[1].0 * 100.0));
+            }
             for (s, (share, rates)) in slots.iter_mut().zip(&raced) {
                 s.placement = placement(*share);
                 let stars = self.roster.umas.iter().find(|u| u.id == s.trainee).map_or(3, |u| u.stars);
@@ -434,6 +458,8 @@ impl App {
             scored.push(slots);
         }
         // Fill the races with the fewest candidates first; each character once in the team.
+        self.stage("Picking each race's three")?;
+        self.note("Races with the fewest candidates pick first; each character runs once in the team, and a new running style adds the positioning bonus.");
         let mut order: Vec<usize> = (0..ROWS.len()).collect();
         order.sort_by_key(|r| scored[*r].len());
         // Pinned runners hold their characters from the start.
@@ -473,12 +499,18 @@ impl App {
                 let base = s.placement + s.skills + POSITIONING * styles as f64 / 3.0;
                 s.total = if s.ace { base * 1.1 } else { base };
             }
+            if let Some(ace) = team.first() {
+                let names = super::short_names(&self.kb, &team.iter().map(|s| s.trainee).collect::<Vec<_>>());
+                let rest = names[1..].join(" and ");
+                self.note(format!("{}: {} is the Ace (about {} points){}.", ROWS[r].0, names[0], crate::lineage_kit::thousands(ace.total), if rest.is_empty() { String::new() } else { format!(", with {rest}") }));
+            }
             rows[r] = Some(Row { name: ROWS[r].0, slots: team, styles, today: Vec::new(), gain: None, notes: rnotes });
         }
         let mut rows: Vec<Row> = rows.into_iter().flatten().collect();
         // Each runner's lineage: her race's surface and distance and her style at A, inheriting
         // the meta's unique (564 Escapades) when a route reaches it, else without.
         let inherit = (meta.inherit.uma > 0 && self.kb.umas.contains_key(&meta.inherit.uma)).then_some(meta.inherit.uma);
+        self.stage("Planning parents")?;
         for row in &mut rows {
             let i = ROWS.iter().position(|r| r.0 == row.name).unwrap_or(0);
             let (_, surface, distance, _) = ROWS[i];
@@ -510,12 +542,34 @@ impl App {
                     }
                 }
                 s.parents = p.unwrap_or(base);
+                let what = if s.parents.need.iter().all(|n| n.1 == 0) {
+                    "she starts at A on her own".to_string()
+                } else if s.ready {
+                    "her finished umas already start her at A".to_string()
+                } else if s.parents.steps.is_empty() {
+                    "no parent route under the cap".to_string()
+                } else {
+                    format!("{} parent career{} first, about {:.0} careers", s.parents.steps.len(), if s.parents.steps.len() == 1 { "" } else { "s" }, s.parents.careers())
+                };
+                if !what.starts_with("she starts at A") {
+                    let line = format!("{} ({}): {what}.", super::short_name(&self.kb, s.trainee), row.name);
+                    self.note(line);
+                }
             }
+            self.check_cancel()?;
+        }
+        let natural = rows.iter().flat_map(|r| &r.slots).filter(|s| s.parents.need.iter().all(|n| n.1 == 0)).count();
+        if natural > 0 {
+            self.note(format!("{natural} of the runners start at A in their race on their own: no parents needed."));
         }
         // What the player can field today: per race, up to three finished umas as they are (each
         // character once in the team), raced against the planned runners on the same course and
         // scored the same way.
+        self.stage("Comparing with today's team")?;
         let vets = self.veterans();
+        if vets.is_empty() {
+            self.note("No finished umas imported yet, so there's no team today to compare with.");
+        }
         let mut taken: Vec<u32> = Vec::new();
         let (mut today_total, mut gain) = (0.0, 0.0);
         let race = crate::sim::run::race_params(1, 1, 1, 2, None);
@@ -551,6 +605,8 @@ impl App {
             let today_pts = team_points(&row.today.iter().map(|t| (t.1, t.0.style)).collect::<Vec<_>>());
             let g = team_points(&planned) - today_pts;
             row.gain = Some(g);
+            self.note(format!("{}: today about {} points; the plan gains {}{}.", row.name, crate::lineage_kit::thousands(today_pts), if g < 0.0 { "−" } else { "+" }, crate::lineage_kit::thousands(g.abs())));
+            self.check_cancel()?;
             today_total += today_pts;
             gain += g;
         }

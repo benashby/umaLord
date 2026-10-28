@@ -136,7 +136,14 @@ the steps to plan a career, and the game words the app uses.
       Copy summary / Save chart as PNG / Save to plan.
 - Career > Results: log careers, Team Trials, Champions Meeting, League of Heroes and
   sparks.
-- Lineage: your next career, and why. Three views:
+- Lineage: your next career, and why. It opens on an Overview of where each plan stands,
+  with what you did lately (Undo takes a "marked done" back). Nothing simulates until you
+  press Create plan, Re-plan or Reset; making a plan shows each stage as it runs, with
+  Cancel, and the plan keeps that log under "How this plan was chosen". A saved plan has
+  Mark done (pick the finished uma that ran the career), Edit (keep or leave out runners;
+  the changes wait until you re-plan), Re-plan, and Reset in the "..." menu. When you
+  import finished umas or the meta sheet is read again, the plan says so and you choose.
+  Three views:
   - Champions Meeting: three runners for the next CM, each against what you can field
     today (your finished umas as they are, raced in the simulator), and the parent careers
     they need.

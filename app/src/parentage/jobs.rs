@@ -151,7 +151,7 @@ impl Avoid {
 }
 
 /// The planner's answer for a goal.
-#[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct Proposal {
     /// Pink stars each target needs.
     pub need: Vec<(usize, u32)>,

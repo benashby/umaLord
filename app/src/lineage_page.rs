@@ -6,12 +6,12 @@
 
 use crate::App;
 use crate::parentage::brief::Brief;
-use crate::parentage::team::{CmTeam, TeamOpts};
-use crate::parentage::tt::{TtPins, TtTeam};
+use crate::parentage::saved::{Built, QueueRow};
+use crate::parentage::team::CmTeam;
+use crate::parentage::tt::TtTeam;
 use crate::theme::{pal, size};
 use crate::ui_util::semibold;
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
-use std::sync::mpsc::{Receiver, channel};
 
 /// The two-pane breakpoint, the action pane's width and the gap (see `panes`).
 const WIDE: f32 = 1200.0;
@@ -23,6 +23,7 @@ const PROSE_W: f32 = 580.0;
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(crate) enum LineageView {
     #[default]
+    Overview,
     Cm,
     Tt,
     Runner,
@@ -31,6 +32,7 @@ pub(crate) enum LineageView {
 impl LineageView {
     fn info(self) -> (&'static str, &'static str, &'static str) {
         match self {
+            LineageView::Overview => ("🧭", "Overview", "Where each plan stands: Champions Meeting, Team Trials and one runner."),
             LineageView::Cm => ("🏆", "Champions Meeting", "Three runners for the next Champions Meeting, and the parent careers they need."),
             LineageView::Tt => ("🏟", "Team Trials", "Fifteen runners across the five races, an Ace for each, and the career that raises the team most."),
             LineageView::Runner => ("🌱", "One runner", "One runner's parent plan, step by step."),
@@ -38,50 +40,39 @@ impl LineageView {
     }
 }
 
-/// A team the worker built, with everything the page shows already worked out.
-pub(crate) enum Built {
-    Cm { team: CmTeam, next: Option<Brief>, queue: Vec<QueueRow>, borrows: Vec<(Option<String>, Vec<(u32, String)>)> },
-    Tt { team: TtTeam, next: Option<Brief>, lengths: Vec<String> },
-}
-
-/// One row of the parent queue, in words.
-#[derive(Clone, Debug)]
-pub(crate) struct QueueRow {
-    pub trainee: u32,
-    pub for_runner: u32,
-    pub what: String,
-    pub legacies: Vec<(u64, u32)>,
-    pub careers: String,
-    pub style: String,
-    /// The step's deck and its borrowed card, with why and fallbacks (from its brief).
-    pub deck: Vec<u32>,
-    pub friend: Option<u32>,
-    pub friend_why: Option<String>,
-    pub friend_alts: Vec<(u32, String)>,
-}
-
 #[derive(Default)]
 pub(crate) struct LineageState {
     pub view: LineageView,
     /// Which upcoming CM, by position in the schedule.
     pub cm: usize,
-    pub job: Option<(LineageView, Receiver<Result<Built, String>>)>,
-    pub cm_built: Option<Result<Built, String>>,
+    /// The saved team plans, a build in flight, and what's open (`lineage_plans.rs`).
+    pub p: crate::lineage_plans::PlansUi,
     /// When the last build arrived (screenshots give its art a moment to load).
     pub done_at: Option<f64>,
     /// Which borrowed card's "What to look for" is open (a key per place).
     pub look_for: Option<String>,
-    pub tt_built: Option<Result<Built, String>>,
     pub runner: crate::lineage_runner::RunnerState,
 }
 
 impl App {
     pub(crate) fn lineage_page(&mut self, ui: &mut egui::Ui) {
-        self.lineage_poll(ui.ctx());
+        self.plan_poll(ui.ctx());
+        // UMALORD_PLAN=create (or building, to screenshot the log mid-way) makes the view's plan
+        // on the first frame, as Create plan would.
+        if !self.lineage.p.env_done {
+            self.lineage.p.env_done = true;
+            if matches!(std::env::var("UMALORD_PLAN").as_deref(), Ok("create" | "building")) {
+                if let Some(which) = self.view_which() {
+                    let ctx = ui.ctx().clone();
+                    self.plan_start(&ctx, which, Default::default());
+                }
+            }
+        }
         egui::Panel::top("lineage_bar")
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 18, top: 12, bottom: 10 }))
             .show(ui, |ui| self.lineage_bar(ui));
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 12 })).show(ui, |ui| match self.lineage.view {
+            LineageView::Overview => self.lineage_overview(ui),
             LineageView::Cm => self.lineage_cm(ui),
             LineageView::Tt => self.lineage_tt(ui),
             LineageView::Runner => self.lineage_runner(ui),
@@ -93,7 +84,7 @@ impl App {
             ui.set_min_height(34.0);
             ui.label(semibold("🌱 Lineage", 22.0));
             ui.add_space(14.0);
-            for v in [LineageView::Cm, LineageView::Tt, LineageView::Runner] {
+            for v in [LineageView::Overview, LineageView::Cm, LineageView::Tt, LineageView::Runner] {
                 let (icon, label, what) = v.info();
                 if ui.add(egui::Button::selectable(self.lineage.view == v, RichText::new(format!("{icon} {label}")).size(14.0)).min_size(vec2(0.0, 30.0))).on_hover_text(what).clicked() {
                     self.lineage.view = v;
@@ -102,74 +93,12 @@ impl App {
         });
     }
 
-    /// Start building the view's team on a worker thread, unless one is built or building.
-    fn lineage_start(&mut self, ctx: &egui::Context, view: LineageView) {
-        if self.lineage.job.is_some() {
-            return;
-        }
-        let root = self.root.clone();
-        let today = crate::ui_util::today();
-        let cm = self.kb.upcoming_cms(&today).get(self.lineage.cm).map(|e| (*e).clone());
-        let (tx, rx) = channel();
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let mut app = crate::agent::mcp::headless_app(root);
-            let out = match view {
-                LineageView::Cm => cm.ok_or_else(|| "No upcoming Champions Meeting in the schedule.".to_string()).and_then(|preset| {
-                    let team = app.cm_team(&preset, &TeamOpts::default())?;
-                    let inv = app.parent_inventory();
-                    let next = app.cm_next(&team, &inv);
-                    let mut queue = Vec::new();
-                    for (k, (i, run)) in team.queue.iter().enumerate() {
-                        let mut q = queue_row(&app, &inv, team.runners[*i].trainee, run);
-                        let b = app.parent_brief(&team.runners[*i].goal, run, &inv, k);
-                        (q.deck, q.friend, q.friend_why, q.friend_alts) = (b.deck, b.friend, b.friend_why, b.friend_alts);
-                        queue.push(q);
-                    }
-                    // Each runner's borrowed card: why, and what to take instead.
-                    let borrows = team.runners.iter().map(|r| app.friend_picks(&r.plan)).collect();
-                    Ok(Built::Cm { team, next, queue, borrows })
-                }),
-                LineageView::Tt => app.tt_team(200, &TtPins::default()).map(|team| {
-                    let inv = app.parent_inventory();
-                    let next = app.tt_next(&team, &inv);
-                    // Each race's track lengths from the meta ("1200–1400 m").
-                    let meta = app.tt_meta();
-                    let lengths = team.rows.iter().map(|r| {
-                        let ls: Vec<u32> = meta.tracks.get(r.name).and_then(|v| v.as_object()).map(|o| o.keys().filter_map(|k| k.parse().ok()).collect()).unwrap_or_default();
-                        match (ls.iter().min(), ls.iter().max()) {
-                            (Some(a), Some(b)) if a != b => format!("{a}–{b} m"),
-                            (Some(a), _) => format!("{a} m"),
-                            _ => String::new(),
-                        }
-                    }).collect();
-                    Built::Tt { team, next, lengths }
-                }),
-                LineageView::Runner => Err("not built here".into()),
-            };
-            let _ = tx.send(out);
-            ctx.request_repaint();
-        });
-        self.lineage.job = Some((view, rx));
-    }
-
-    fn lineage_poll(&mut self, ctx: &egui::Context) {
-        let Some((view, rx)) = &self.lineage.job else { return };
-        if let Ok(r) = rx.try_recv() {
-            match view {
-                LineageView::Cm => self.lineage.cm_built = Some(r),
-                _ => self.lineage.tt_built = Some(r),
-            }
-            self.lineage.job = None;
-            self.lineage.done_at = Some(ctx.input(|i| i.time));
-        } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
-        }
-    }
-
     /// Whether the page is still building (screenshots wait for it).
     pub(crate) fn lineage_busy(&self, now: f64) -> bool {
-        self.lineage.job.is_some() || self.lineage.done_at.is_some_and(|t| now - t < 0.5)
+        if std::env::var("UMALORD_PLAN").as_deref() == Ok("building") {
+            return self.lineage.p.job.as_ref().is_some_and(|j| j.stages.len() < 3);
+        }
+        self.lineage.p.job.is_some() || self.lineage.done_at.is_some_and(|t| now - t < 0.5)
     }
 
     /// The page's two layouts, chosen once from the page's width:
@@ -222,29 +151,19 @@ impl App {
         }
     }
 
-    fn building(&self, ui: &mut egui::Ui, what: &str) {
-        crate::ui_util::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(RichText::new(what).color(pal(ui).weak));
-            });
-        });
-    }
-
     fn lineage_cm(&mut self, ui: &mut egui::Ui) {
-        if self.lineage.cm_built.is_none() {
-            let ctx = ui.ctx().clone();
-            self.lineage_start(&ctx, LineageView::Cm);
-            self.building(ui, "Planning the team: three runners, their parents, decks and skills, raced against each other and against your finished umas…");
-            return;
-        }
-        let Some(Ok(Built::Cm { team, next, queue, borrows })) = &self.lineage.cm_built else {
-            if let Some(Err(e)) = &self.lineage.cm_built {
-                ui.label(RichText::new(format!("⚠ {e}")).color(pal(ui).warn));
-            }
+        let Some(which) = self.view_which() else {
+            prose(ui, "No upcoming Champions Meeting is in the schedule yet.", 14.0, pal(ui).weak);
             return;
         };
-        let (team, next, queue, borrows) = (team.clone(), next.clone(), queue.clone(), borrows.clone());
+        let Some(plan) = self.team_plans().get(which).cloned() else {
+            self.plan_alone(ui, which);
+            return;
+        };
+        let Built::Cm { team, queue, borrows, .. } = plan.built.clone() else { return };
+        // The plan bar leads the overview pane; in one column it comes first.
+        let wide = ui.available_width() >= WIDE;
+        let next = plan.next().map(|c| c.brief.clone());
         self.panes(
             ui,
             |_, ui| {
@@ -256,11 +175,15 @@ impl App {
                 });
             },
             |this, ui| {
-                if let Some(b) = &next {
-                    this.next_card(ui, b);
+                if !wide {
+                    this.plan_lead(ui, which);
                 }
+                this.next_or_done(ui, next.as_ref());
             },
             |this, ui| {
+                if wide {
+                    this.plan_lead(ui, which);
+                }
                 this.today_row(ui, &team);
                 ui.add_space(12.0);
                 this.runner_cards(ui, &team, &borrows);
@@ -269,24 +192,20 @@ impl App {
                 for n in &team.notes {
                     ui.label(RichText::new(format!("⚠ {n}")).size(12.5).color(pal(ui).warn));
                 }
+                this.plan_chosen(ui, which);
             },
         );
     }
 
     fn lineage_tt(&mut self, ui: &mut egui::Ui) {
-        if self.lineage.tt_built.is_none() {
-            let ctx = ui.ctx().clone();
-            self.lineage_start(&ctx, LineageView::Tt);
-            self.building(ui, "Planning the Team Trials team: racing each race's candidates head to head (about 20 seconds)…");
-            return;
-        }
-        let Some(Ok(Built::Tt { team, next, lengths })) = &self.lineage.tt_built else {
-            if let Some(Err(e)) = &self.lineage.tt_built {
-                ui.label(RichText::new(format!("⚠ {e}")).color(pal(ui).warn));
-            }
+        let which = crate::parentage::saved::Which::Tt;
+        let Some(plan) = self.team_plans().get(which).cloned() else {
+            self.plan_alone(ui, which);
             return;
         };
-        let (team, next, lengths) = (team.clone(), next.clone(), lengths.clone());
+        let Built::Tt { team, lengths, .. } = plan.built.clone() else { return };
+        let wide = ui.available_width() >= WIDE;
+        let next = plan.next().map(|c| c.brief.clone());
         let p = pal(ui);
         let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
         let next2 = next.clone();
@@ -300,12 +219,54 @@ impl App {
                 });
             },
             |this, ui| {
-                if let Some(b) = &next2 {
-                    this.next_card(ui, b);
+                if !wide {
+                    this.plan_lead(ui, which);
                 }
+                this.next_or_done(ui, next2.as_ref());
             },
-            |this, ui| this.tt_overview(ui, &team, &next, &lengths),
+            |this, ui| {
+                if wide {
+                    this.plan_lead(ui, which);
+                }
+                this.tt_overview(ui, &team, &next, &lengths);
+                this.plan_chosen(ui, which);
+            },
         );
+    }
+
+    /// The plan bar, and the build log under it while the plan is being made again.
+    fn plan_lead(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
+        self.plan_bar(ui, which);
+        ui.add_space(12.0);
+        if self.plan_building(which) {
+            self.build_log(ui, which);
+            ui.add_space(12.0);
+        }
+    }
+
+    /// A view with no saved plan: the build log while one is being made, else the empty state.
+    fn plan_alone(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
+        egui::ScrollArea::vertical().id_salt("lineage_alone").auto_shrink([false, false]).show(ui, |ui| {
+            if self.plan_building(which) {
+                ui.set_max_width(900.0);
+                self.build_log(ui, which);
+            } else {
+                self.plan_empty(ui, which);
+            }
+        });
+    }
+
+    /// The Next career card, or a note when every career in the plan is done.
+    fn next_or_done(&mut self, ui: &mut egui::Ui, next: Option<&Brief>) {
+        match next {
+            Some(b) => self.next_card(ui, b),
+            None => {
+                crate::ui_util::card(ui, |ui| {
+                    ui.label(semibold("Every career in this plan is done", size::MD));
+                    prose(ui, "Re-plan to see whether another career would still raise the team, or plan for the next event.", 13.0, pal(ui).weak);
+                });
+            }
+        }
     }
 
     fn tt_overview(&mut self, ui: &mut egui::Ui, team: &TtTeam, next: &Option<Brief>, lengths: &[String]) {
@@ -1065,18 +1026,9 @@ impl App {
     }
 }
 
-/// A queue row from a step.
-fn queue_row(app: &App, inv: &crate::parentage::Inventory, runner: u32, run: &crate::parentage::jobs::Run) -> QueueRow {
-    let legacies = run.legacies.iter().zip(run.legacy_umas).map(|(id, uma)| (*id, if uma == 0 { inv.by_id(*id).map_or(0, |p| p.uma) } else { uma })).collect();
-    let what = if run.must.is_empty() { "just finishing her".to_string() } else { run.must.iter().map(|w| w.label(&app.kb)).collect::<Vec<_>>().join(", ") };
-    let style = app.kb.umas.get(&run.trainee).map(|u| u.aptitude.best_style().label()).unwrap_or("").to_string();
-    let (typical, _) = crate::parentage::verify::step_spread(run.p);
-    QueueRow { trainee: run.trainee, for_runner: runner, what, legacies, careers: format!("usually {typical} career{}", if typical == 1 { "" } else { "s" }), style, deck: Vec::new(), friend: None, friend_why: None, friend_alts: Vec::new() }
-}
-
 /// A section that opens and closes, remembered across launches in settings.json
 /// (`lineage_open`), since eframe's persistence is off.
-fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: bool, body: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: bool, body: impl FnOnce(&mut egui::Ui)) {
     use egui::collapsing_header::{CollapsingState, paint_default_icon};
     let saved: std::collections::BTreeMap<String, bool> = crate::collection_kit::setting(ui.ctx(), "lineage_open");
     let open = saved.get(key).copied().unwrap_or(default_open);
@@ -1105,7 +1057,7 @@ fn borrow_chip(ui: &mut egui::Ui, kb: &crate::knowledge::Knowledge, card: u32, o
 }
 
 /// A paragraph, ragged right and no wider than about 80 characters.
-fn prose(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
+pub(crate) fn prose(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
     let w = ui.available_width().min(PROSE_W);
     ui.allocate_ui_with_layout(vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_max_width(w);
@@ -1158,7 +1110,7 @@ fn pills(ui: &mut egui::Ui, items: &[String], color: Color32) {
 }
 
 /// A small rounded label: one widget, so it wraps whole in a wrapping row.
-fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
+pub(crate) fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
     // Drawn on its own tint over the raised surface (the darkest it sits on); text reaches 4.5:1 there.
     let fill = crate::lineage_kit::tint(color, pal(ui).raised, 0.16);
     let ink = crate::lineage_kit::ink(color, fill);
@@ -1176,24 +1128,12 @@ fn short_name(kb: &crate::knowledge::Knowledge, outfit: u32) -> String {
 
 /// "an End Closer", "a Pace Chaser".
 fn style_article(s: crate::knowledge::Style) -> String {
-    let l = s.label();
-    format!("{} {l}", if l.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" })
+    s.article()
 }
 
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
 }
 
-fn thousands(v: f64) -> String {
-    let n = v.round() as i64;
-    let s = n.abs().to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if n < 0 { format!("-{out}") } else { out }
-}
+use crate::lineage_kit::thousands;

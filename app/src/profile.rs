@@ -63,7 +63,7 @@ fn allowed(rel: &str) -> bool {
     let name_ok = |n: &str| !n.is_empty() && n.ends_with(".md") && !n.contains(['/', '\\', ':']) && !n.starts_with('.');
     match rel.split_once('/') {
         Some(("account", f)) => matches!(f, "umas.md" | "support_cards.md" | "parents.md" | "veterans.json"),
-        Some(("plans", f)) => (name_ok(f) && f != "_template.md") || rel == crate::parentage::track::FILE || rel == crate::parentage::modes::FILE,
+        Some(("plans", f)) => (name_ok(f) && f != "_template.md") || rel == crate::parentage::track::FILE || rel == crate::parentage::modes::FILE || rel == crate::parentage::saved::FILE,
         Some(("results", f)) => name_ok(f),
         None => rel == "insights.md",
         _ => false,
