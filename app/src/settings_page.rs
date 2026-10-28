@@ -590,11 +590,12 @@ impl App {
         let data = self.live.data.clone();
         source_line(ui, "umamusume.com", data.as_ref().map(|d| &d.news));
         source_line(ui, "umalator.app", data.as_ref().map(|d| &d.umalator));
+        source_line(ui, "uma.guide (affinity, weekly)", data.as_ref().map(|d| &d.uma_guide).filter(|s| !s.message.is_empty()));
         ui.horizontal(|ui| {
             if self.live.rx.is_some() {
                 ui.spinner();
                 ui.label(RichText::new("Checking…").color(p.weak));
-            } else if ui.add(egui::Button::new("🔄 Refresh now").min_size(vec2(0.0, 30.0))).on_hover_text("Fetch the news and Umalator's presets again").clicked() {
+            } else if ui.add(egui::Button::new("🔄 Refresh now").min_size(vec2(0.0, 30.0))).on_hover_text("Fetch the news, Umalator's presets and the affinity tables again").clicked() {
                 self.refresh_live(true);
             }
             if let Some(d) = &data {
