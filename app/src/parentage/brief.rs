@@ -43,6 +43,9 @@ pub struct Brief {
     /// The Independent Training agenda: each race, her distance/surface grades ("A/B") and her
     /// win chance in percent before any streak penalty.
     pub agenda: Vec<(String, String, u32)>,
+    /// A runner's own Independent Training runs the player marked: (reached the stamina floor,
+    /// marked). None until there's one; no guess stands in for it.
+    pub it_floor: Option<(u32, u32)>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -201,6 +204,7 @@ impl App {
             mode: "Independent Training".into(),
             setup,
             agenda,
+            it_floor: None,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -240,8 +244,10 @@ impl App {
         // Runners race on their stats and skills: a manual career (Cygames: manual runs are
         // generally much stronger than Independent Training).
         let setup = vec![format!("If you grind her with Independent Training anyway: focus {}, prioritize the first ten skills above, and keep only a run that reaches the stamina floor.", focus(plan.target[1]))];
+        let it_floor = stamina_floor.as_ref().zip(plan.trainee).zip(self.root.as_ref()).and_then(|(((f, _), t), root)| super::modes::load(root).floor_rate(&self.veterans(), t, *f));
         Brief {
             agenda: Vec::new(),
+            it_floor,
             mode: "Manual career".into(),
             setup,
             why,
@@ -275,6 +281,9 @@ pub fn text(kb: &Knowledge, b: &Brief) -> String {
     out += &format!("- Races: {}\n", b.races.join(" "));
     out += &format!("- Keep: {}\n", b.keep.join(" "));
     out += &format!("- Set up: {}\n", b.setup.join(" "));
+    if let Some((reached, runs)) = b.it_floor {
+        out += &format!("- Your Independent Training runs of her: {reached} of {runs} reached the stamina floor.\n");
+    }
     out
 }
 

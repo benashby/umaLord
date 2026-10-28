@@ -14,6 +14,7 @@
 pub mod baseline;
 pub mod brief;
 pub mod jobs;
+pub mod modes;
 pub mod outcome;
 pub mod score;
 pub mod text;

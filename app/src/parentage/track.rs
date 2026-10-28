@@ -299,6 +299,14 @@ impl ParentPlan {
         self.steps.iter().filter(|s| !s.finished()).map(|s| s.run.clone()).collect()
     }
 
+    /// How the current step's careers so far were run: (Independent Training, manual). A parent
+    /// career unmarked counts as Independent Training, the mode the brief asks for.
+    pub fn step_modes(&self, vets: &[Veteran], log: &super::modes::ModeLog) -> (u32, u32) {
+        let hits = self.hits(vets);
+        let manual = hits.iter().filter(|h| log.of(h.id, super::modes::Mode::Independent) == super::modes::Mode::Manual).count() as u32;
+        (hits.len() as u32 - manual, manual)
+    }
+
     /// The current step's finished umas, closest to its must-haves first: the ones to settle with.
     pub fn closest(&self, vets: &[Veteran]) -> Vec<Hit> {
         let mut out = self.hits(vets);
@@ -669,6 +677,17 @@ mod tests {
         assert_eq!(past.len(), 1);
         assert!(past[0].log.last().is_some_and(|l| l.contains("cancelled")) && past[0].before.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_steps_careers_split_by_mode() {
+        let (kb, _, mut vets, plan) = start();
+        vets.push(vet(4, 105201, "2026-10-20 10:00:00", &[spark(&kb, "pink", "Sprint", 2)], &[(10, 106801), (20, 100201)]));
+        vets.push(vet(5, 105201, "2026-10-21 10:00:00", &[], &[(10, 106801), (20, 100201)]));
+        let mut log = super::super::modes::ModeLog::default();
+        assert_eq!(plan.step_modes(&vets, &log), (2, 0), "unmarked parent careers count as Independent Training");
+        log.mark(5, super::super::modes::Mode::Manual);
+        assert_eq!(plan.step_modes(&vets, &log), (1, 1));
     }
 
     #[test]
