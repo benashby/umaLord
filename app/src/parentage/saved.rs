@@ -217,6 +217,9 @@ pub struct TeamPlan {
     /// None for a plan made before the ceiling was measured.
     #[serde(default)]
     pub ceiling: Option<Vec<super::ceiling::Lever>>,
+    /// What the ceiling search tried.
+    #[serde(default)]
+    pub tried: super::ceiling::Tried,
 }
 
 /// Something that changed under a plan, and what the player can do about it.
@@ -236,6 +239,23 @@ pub enum Act {
 }
 
 impl TeamPlan {
+    /// How to raise the plan, without what finished careers made moot: a parent for a runner
+    /// whose parent careers are all done saves nothing now.
+    pub fn live_ceiling(&self) -> Option<Vec<super::ceiling::Lever>> {
+        let v = self.ceiling.as_ref()?;
+        Some(
+            v.iter()
+                .filter(|l| {
+                    l.kind != super::ceiling::LeverKind::Parent || {
+                        let mut parents = self.careers.iter().filter(|c| !c.own && c.brief.for_runner == l.uma).peekable();
+                        parents.peek().is_none() || parents.any(|c| c.done.is_none())
+                    }
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// The next career: the first not done.
     pub fn next(&self) -> Option<&Career> {
         self.careers.iter().find(|c| c.done.is_none())
@@ -537,12 +557,12 @@ impl App {
         }
         self.note(format!("{} careers in order: the parent careers first, hardest first, then each runner's own.", careers.len()));
         self.stage("Looking for ways to raise the ceiling")?;
-        let ceiling = self.cm_ceiling(&team, preset, &inv);
+        let (ceiling, tried) = self.cm_ceiling(&team, preset, &inv);
         self.check_cancel()?;
         self.note(ceiling_line(&ceiling));
         let borrows = team.runners.iter().map(|r| self.friend_picks(&r.plan)).collect();
         let next = careers.first().map(|c| c.brief.clone());
-        Ok(TeamPlan { which: Which::Cm(preset.id), made: stamp(), basis, built: Built::Cm { team, next, queue, borrows }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling) })
+        Ok(TeamPlan { which: Which::Cm(preset.id), made: stamp(), basis, built: Built::Cm { team, next, queue, borrows }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling), tried })
     }
 
     /// Make a Team Trials plan: the team and every career it asks for, the one that raises the
@@ -656,7 +676,7 @@ impl App {
         self.note(format!("{} careers in order: the one that raises the team most first, then the weakest runners', parent careers before their own.", careers.len()));
         let meta = self.tt_meta();
         self.stage("Looking for ways to raise the ceiling")?;
-        let ceiling = self.tt_ceiling(&team, &meta);
+        let (ceiling, tried) = self.tt_ceiling(&team, &meta);
         self.check_cancel()?;
         self.note(ceiling_line(&ceiling));
         let lengths = team
@@ -671,7 +691,7 @@ impl App {
                 }
             })
             .collect();
-        Ok(TeamPlan { which: Which::Tt, made: stamp(), basis, built: Built::Tt { team, next: first, lengths }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling) })
+        Ok(TeamPlan { which: Which::Tt, made: stamp(), basis, built: Built::Tt { team, next: first, lengths }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling), tried })
     }
 }
 
@@ -733,6 +753,7 @@ mod tests {
             pending: Vec::new(),
             dismissed: Vec::new(),
             ceiling: None,
+            tried: Default::default(),
         }
     }
 
@@ -774,6 +795,23 @@ mod tests {
         assert!(plans.reset(Which::Tt, "reset"));
         assert!(plans.get(Which::Tt).is_none());
         assert_eq!(plans.past.len(), 2);
+    }
+
+    /// A parent suggestion stops showing once that runner's parent careers are done.
+    #[test]
+    fn done_parent_careers_retire_their_suggestion() {
+        use super::super::ceiling::{Lever, LeverKind, Unit};
+        let mut p = plan();
+        p.careers[0].brief.for_runner = Some(100601);
+        p.ceiling = Some(vec![
+            Lever { kind: LeverKind::Parent, uma: Some(100601), gain: 3.0, unit: Unit::Careers, ..Default::default() },
+            Lever { kind: LeverKind::GetCard, uma: Some(100601), card: Some(30001), gain: 900.0, ..Default::default() },
+        ]);
+        assert_eq!(p.live_ceiling().map(|v| v.len()), Some(2));
+        p.mark_done("tt:Dirt:100601:p0", Some(3), "now").unwrap();
+        let live = p.live_ceiling().unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].kind, LeverKind::GetCard);
     }
 
     #[test]

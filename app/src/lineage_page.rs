@@ -208,7 +208,7 @@ impl App {
                 }
                 this.plan_summary(ui, &plan);
                 ui.add_space(12.0);
-                if this.ceiling_card(ui, &crate::parentage::saved::label(which), plan.ceiling.as_deref(), false) {
+                if this.ceiling_card(ui, &crate::parentage::saved::label(which), plan.live_ceiling().as_deref(), &plan.tried, plan.basis.vets.is_empty(), false) {
                     let ctx = ui.ctx().clone();
                     this.plan_start(&ctx, which, plan.choices_after());
                 }

@@ -66,6 +66,60 @@ pub struct Lever {
     pub measured: String,
     /// Other runners the same change helps (a card for several decks).
     pub helps: Vec<u32>,
+    /// What was compared, for the tag's hover.
+    pub compared: String,
+    /// The title in a few words, for the Overview: "Get Hishi Amazon for Medium".
+    pub short: String,
+    /// A parent: the characters to look for among friends' legacies (best first), and the
+    /// finished uma she pairs with.
+    pub look: Vec<u32>,
+    pub partner: Option<u64>,
+}
+
+/// What a ceiling search tried, for when nothing was worth listing.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Tried {
+    pub umas: usize,
+    pub cards: usize,
+    pub limit_breaks: usize,
+    pub parents: usize,
+}
+
+impl Tried {
+    /// "9 umas you don't own, 6 cards, 2 limit breaks and a better parent for 3 runners".
+    pub fn text(&self) -> String {
+        let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+        let mut parts = Vec::new();
+        if self.umas > 0 {
+            parts.push(n(self.umas, "uma you don't own", "umas you don't own"));
+        }
+        if self.cards > 0 {
+            parts.push(n(self.cards, "card", "cards"));
+        }
+        if self.limit_breaks > 0 {
+            parts.push(n(self.limit_breaks, "limit break", "limit breaks"));
+        }
+        if self.parents > 0 {
+            parts.push(format!("a better parent for {}", n(self.parents, "runner", "runners")));
+        }
+        match parts.len() {
+            0 => "nothing".into(),
+            1 => parts.remove(0),
+            _ => {
+                let last = parts.pop().unwrap_or_default();
+                format!("{} and {last}", parts.join(", "))
+            }
+        }
+    }
+
+    fn count(&mut self, lb: Option<u8>) {
+        if lb.is_some() {
+            self.limit_breaks += 1;
+        } else {
+            self.cards += 1;
+        }
+    }
 }
 
 impl Lever {
@@ -75,7 +129,7 @@ impl Lever {
         match self.unit {
             Unit::Points => format!("+{n} pts a round"),
             Unit::Lengths => format!("+{:.1} lengths a race", self.gain),
-            Unit::Careers => format!("−{:.0} career{}", self.gain, if self.gain.round() == 1.0 { "" } else { "s" }),
+            Unit::Careers => format!("{:.0} fewer career{}", self.gain, if self.gain.round() == 1.0 { "" } else { "s" }),
             Unit::Stats => format!("+{n} stats"),
         }
     }
@@ -186,18 +240,23 @@ impl App {
         p
     }
 
-    fn card_title(&self, card: u32, lb: Option<u8>) -> (LeverKind, String) {
-        let name = self.kb.cards.get(&card).map_or(format!("card {card}"), |c| format!("{} [{}]", c.uma, c.title));
+    /// A card lever's kind, title and short title.
+    fn card_title(&self, card: u32, lb: Option<u8>, runner: u32) -> (LeverKind, String, String) {
+        let c = self.kb.cards.get(&card);
+        let name = c.map_or(format!("card {card}"), |c| format!("{} [{}]", c.uma, c.title));
+        let uma = c.map_or(String::new(), |c| c.uma.clone());
+        let who = super::short_name(&self.kb, runner);
         match lb {
-            Some(l) => (LeverKind::LimitBreak, format!("Limit-break your {name} from LB{l} to MLB")),
-            None => (LeverKind::GetCard, format!("Get {name}")),
+            Some(l) => (LeverKind::LimitBreak, format!("Your {name} card from LB{l} to MLB, for {who}"), format!("Limit-break {uma} to MLB")),
+            None => (LeverKind::GetCard, format!("Get {name}{}", c.map_or(String::new(), |c| format!(" ({} {})", c.rarity, c.kind))), format!("Get the {uma} card")),
         }
     }
 
     /// Team Trials: the community's runners the player doesn't own, one per race, raced against
     /// that race's team; and better cards for each race's Ace, raced against her as planned.
-    pub(crate) fn tt_ceiling(&mut self, team: &TtTeam, meta: &TtMeta) -> Vec<Lever> {
-        let Some(data) = self.sim_data.clone() else { return Vec::new() };
+    pub(crate) fn tt_ceiling(&mut self, team: &TtTeam, meta: &TtMeta) -> (Vec<Lever>, Tried) {
+        let mut tried = Tried::default();
+        let Some(data) = self.sim_data.clone() else { return (Vec::new(), tried) };
         let saved = std::mem::take(&mut self.planner.plan);
         let today = crate::ui_util::today();
         let race = crate::sim::run::race_params(1, 1, 1, 2, None);
@@ -244,6 +303,7 @@ impl App {
                     app.plan_sim_build(true).ok()
                 });
                 let Some(b) = built else { continue };
+                tried.umas += 1;
                 let mut pool = builds.clone();
                 pool.push(Some(b));
                 let raced = super::baseline::race_pool(&data, &course, &race, &pool, &opts);
@@ -269,7 +329,9 @@ impl App {
                         kind: LeverKind::GetUma,
                         uma: Some(t),
                         title: format!("Get {} for {}", uma_name(&self.kb, t), row.name),
+                        short: format!("Get {} for {}", super::short_name(&self.kb, t), row.name),
                         why: if n == 3 { format!("The community runs her in {}; in head-to-heads she'd take {replaced}'s place.", row.name) } else { format!("The community runs her in {}, and the race has a free place.", row.name) },
+                        compared: format!("The plan's {race} three with {} in {replaced}'s place, against the plan's three as they are: {RACES} races each on a {race} course.", super::short_name(&self.kb, t), race = row.name),
                         gain,
                         unit: Unit::Points,
                         measured: measured.clone(),
@@ -287,6 +349,7 @@ impl App {
                 }
                 let plan = Self::with_card_in(&ace.plan, slot, card);
                 let Some((new, _)) = self.with_mlb(card, |app| app.career_build(&plan)) else { continue };
+                tried.count(lb);
                 let mut pool: Vec<Option<UmaBuild>> = vec![Some(old.clone()), Some(new)];
                 pool.extend(builds[1..].iter().cloned());
                 let raced = super::baseline::race_pool(&data, &course, &race, &pool, &opts);
@@ -294,7 +357,7 @@ impl App {
                 let pts = |k: usize| super::tt::placement(raced[k].0) + super::tt::skills_score(&self.kb, meta, ace.trainee, stars, &raced[k].1);
                 // The Ace scores 10% more.
                 let gain = (pts(1) - pts(0)) * 1.1;
-                let (kind, title) = self.card_title(card, lb);
+                let (kind, title, short) = self.card_title(card, lb, ace.trainee);
                 self.note(format!("{} ({} Ace) with {}: {} a round.", super::short_name(&self.kb, ace.trainee), row.name, self.kb.cards.get(&card).map_or(String::new(), |c| c.uma.clone()), if gain >= 0.0 { format!("+{}", crate::lineage_kit::thousands(gain)) } else { format!("−{}", crate::lineage_kit::thousands(-gain)) }));
                 if gain >= MIN_POINTS {
                     out.push(Lever {
@@ -303,7 +366,9 @@ impl App {
                         card: Some(card),
                         lb,
                         title,
+                        short,
                         why: format!("For {}, {}'s Ace: her simulated career ends stronger with it in her deck.", super::short_name(&self.kb, ace.trainee), row.name),
+                        compared: format!("{who}'s career simulated with the card {} and as planned, then each {who} raced with the plan's other {race} runners: {RACES} races each.", if lb.is_some() { "at MLB" } else { "in her deck" }, who = super::short_name(&self.kb, ace.trainee), race = row.name),
                         gain,
                         unit: Unit::Points,
                         measured: format!("career simulated, then {RACES} races"),
@@ -313,14 +378,15 @@ impl App {
             }
         }
         self.planner.plan = saved;
-        rank(out)
+        (rank(out), tried)
     }
 
     /// Champions Meeting: the sheet's picks the player doesn't own, raced head to head against
     /// the runner of their style; better cards for each runner; and a better parent where a
     /// runner still needs parent careers.
-    pub(crate) fn cm_ceiling(&mut self, team: &super::team::CmTeam, preset: &EventPreset, inv: &Inventory) -> Vec<Lever> {
-        let Some(data) = self.sim_data.clone() else { return Vec::new() };
+    pub(crate) fn cm_ceiling(&mut self, team: &super::team::CmTeam, preset: &EventPreset, inv: &Inventory) -> (Vec<Lever>, Tried) {
+        let mut tried = Tried::default();
+        let Some(data) = self.sim_data.clone() else { return (Vec::new(), tried) };
         let saved = std::mem::take(&mut self.planner.plan);
         let mut out = Vec::new();
         let opts = crate::sim::run::SimOptions { samples: RACES, seed: 12345.0, ..Default::default() };
@@ -358,6 +424,7 @@ impl App {
                     app.plan_sim_build(true).ok()
                 });
                 let Some(mut b) = built else { continue };
+                tried.umas += 1;
                 b.skills.retain(|s| !preset.disabled_skills.contains(s));
                 let (gain, share) = head(&planned, &b);
                 self.note(format!("{} against {} ({}): {:+.1} lengths a race.", uma_name(&self.kb, t), super::short_name(&self.kb, r.trainee), r.style.label(), gain));
@@ -366,6 +433,8 @@ impl App {
                         kind: LeverKind::GetUma,
                         uma: Some(t),
                         title: format!("Get {} as the team's {}", uma_name(&self.kb, t), r.style.label()),
+                        short: format!("Get {}", super::short_name(&self.kb, t)),
+                        compared: format!("{} against {}, head to head: {RACES} races on {}.", super::short_name(&self.kb, t), super::short_name(&self.kb, r.trainee), preset.course_name),
                         why: format!("The meta sheet recommends her for CM {}; she finishes ahead of {} in {:.0}% of head-to-heads.", preset.id, super::short_name(&self.kb, r.trainee), share * 100.0),
                         gain,
                         unit: Unit::Lengths,
@@ -384,9 +453,10 @@ impl App {
                 }
                 let plan = Self::with_card_in(&r.plan, slot, card);
                 let Some((mut new, _)) = self.with_mlb(card, |app| app.career_build(&plan)) else { continue };
+                tried.count(lb);
                 new.skills.retain(|s| !preset.disabled_skills.contains(s));
                 let (gain, share) = head(&old, &new);
-                let (kind, title) = self.card_title(card, lb);
+                let (kind, title, short) = self.card_title(card, lb, r.trainee);
                 self.note(format!("{} with {}: {:+.1} lengths a race against her career as planned.", super::short_name(&self.kb, r.trainee), self.kb.cards.get(&card).map_or(String::new(), |c| c.uma.clone()), gain));
                 if gain >= MIN_LENGTHS {
                     out.push(Lever {
@@ -395,6 +465,8 @@ impl App {
                         card: Some(card),
                         lb,
                         title,
+                        short,
+                        compared: format!("{who}'s career simulated with the card {} and as planned, then the two raced head to head: {RACES} races on {}.", if lb.is_some() { "at MLB" } else { "in her deck" }, preset.course_name, who = super::short_name(&self.kb, r.trainee)),
                         why: format!("For {}: her simulated career ends stronger with it, and finishes ahead of her career as planned in {:.0}% of races.", super::short_name(&self.kb, r.trainee), share * 100.0),
                         gain,
                         unit: Unit::Lengths,
@@ -403,20 +475,21 @@ impl App {
                     });
                 }
             }
-            if let Some(l) = self.parent_lever(&r.goal, inv, &r.parents) {
+            if let Some(l) = self.parent_lever(&r.goal, inv, &r.parents, &mut tried) {
                 out.push(l);
             }
         }
         self.planner.plan = saved;
-        rank(out)
+        (rank(out), tried)
     }
 
     /// A friend's legacy (or one the player breeds) carrying what the runner's lineage still
     /// lacks, and the parent careers it saves.
-    pub(crate) fn parent_lever(&mut self, goal: &Goal, inv: &Inventory, now: &super::jobs::Proposal) -> Option<Lever> {
+    pub(crate) fn parent_lever(&mut self, goal: &Goal, inv: &Inventory, now: &super::jobs::Proposal, tried: &mut Tried) -> Option<Lever> {
         if now.steps.is_empty() {
             return None;
         }
+        tried.parents += 1;
         let wish = super::jobs::borrow_wish(&self.kb, goal, inv).filter(|w| w.possible)?;
         let chara = wish.charas.first()?.0;
         let uma = *self.kb.umas.keys().filter(|u| crate::affinity::chara(**u) == chara).min()?;
@@ -439,25 +512,37 @@ impl App {
         let mut inv2 = inv.clone();
         inv2.borrow(&self.kb, &borrow);
         let after = super::jobs::propose(&self.kb, goal, &inv2);
-        let saved = now.careers() - after.careers();
+        // Counted as the steps list counts them: each step's usual number of careers.
+        // (An empty sum is -0.0, which prints as "-0".)
+        let usual = |p: &super::jobs::Proposal| -> f64 { p.steps.iter().map(|r| f64::from(super::verify::step_spread(r.p).0.min(50))).sum::<f64>() + 0.0 };
+        let saved = usual(now) - usual(&after);
         let spark = wish.stars.iter().map(|(i, n)| format!("{} pink {n}★", super::APTITUDES[*i])).collect::<Vec<_>>().join(" and ");
-        self.note(format!("A friend's legacy with {spark} for {}: {:.0} parent careers instead of {:.0}.", super::short_name(&self.kb, goal.runner), after.careers(), now.careers()));
+        self.note(format!("A friend's legacy with {spark} for {}: usually {:.0} parent careers instead of {:.0}.", super::short_name(&self.kb, goal.runner), usual(&after), usual(now)));
         (saved >= 1.0).then(|| Lever {
             kind: LeverKind::Parent,
             uma: Some(goal.runner),
             spark: Some(spark.clone()),
             title: format!("Borrow a friend's legacy with {spark} for {}", super::short_name(&self.kb, goal.runner)),
-            why: format!("Paired with your #{}, she starts {} at A without the parent careers.", wish.partner, super::short_name(&self.kb, goal.runner)),
+            short: format!("Borrow a legacy with {spark}"),
+            compared: format!("The parent plan made again with a friend's legacy carrying {spark} as one of {}'s parents, against the plan as it is. Everything else is planned the same way.", super::short_name(&self.kb, goal.runner)),
+            why: if usual(&after) < 0.5 {
+                format!("Paired with your #{}, she starts {} at A without the parent careers.", wish.partner, super::short_name(&self.kb, goal.runner))
+            } else {
+                format!("Paired with your #{}, she starts {} at A: usually {:.0} parent careers instead of {:.0}.", wish.partner, super::short_name(&self.kb, goal.runner), usual(&after), usual(now))
+            },
+            look: wish.charas.iter().filter_map(|(c, _)| self.kb.umas.keys().filter(|u| crate::affinity::chara(**u) == *c).min().copied()).collect(),
+            partner: Some(wish.partner),
             gain: saved,
             unit: Unit::Careers,
-            measured: "planned · the same routes, with her as a parent".into(),
+            measured: "planned · the same routes".into(),
             ..Default::default()
         })
     }
 
     /// One runner: better cards for her own career, measured by the career simulation's expected
     /// final stats; and a better parent.
-    pub(crate) fn runner_ceiling(&mut self, goal: &Goal, plan: &Plan, inv: &Inventory, now: &super::jobs::Proposal) -> Vec<Lever> {
+    pub(crate) fn runner_ceiling(&mut self, goal: &Goal, plan: &Plan, inv: &Inventory, now: &super::jobs::Proposal) -> (Vec<Lever>, Tried) {
+        let mut tried = Tried::default();
         let saved = std::mem::take(&mut self.planner.plan);
         let mut out = Vec::new();
         let cands = self.card_candidates(plan);
@@ -465,8 +550,9 @@ impl App {
             for (slot, card, lb) in cands {
                 let p = Self::with_card_in(plan, slot, card);
                 let Some((_, new)) = self.with_mlb(card, |app| app.career_build(&p)) else { continue };
+                tried.count(lb);
                 let gain: f64 = (0..5).map(|i| new[i] - old[i]).sum();
-                let (kind, title) = self.card_title(card, lb);
+                let (kind, title, short) = self.card_title(card, lb, goal.runner);
                 if gain >= MIN_STATS {
                     let best = (0..5).max_by(|a, b| (new[*a] - old[*a]).total_cmp(&(new[*b] - old[*b]))).unwrap_or(0);
                     out.push(Lever {
@@ -475,6 +561,8 @@ impl App {
                         card: Some(card),
                         lb,
                         title,
+                        short,
+                        compared: format!("{who}'s career simulated 400 times with the card {} and 400 times as planned; the gain is the average difference in her five stats at the end.", if lb.is_some() { "at MLB" } else { "in her deck" }, who = super::short_name(&self.kb, goal.runner)),
                         why: format!("Her simulated career ends with about {} more stats, most in {}.", crate::lineage_kit::thousands(gain), super::STATS[best]),
                         gain,
                         unit: Unit::Stats,
@@ -485,10 +573,10 @@ impl App {
             }
         }
         self.planner.plan = saved;
-        if let Some(l) = self.parent_lever(goal, inv, now) {
+        if let Some(l) = self.parent_lever(goal, inv, now, &mut tried) {
             out.push(l);
         }
-        rank(out)
+        (rank(out), tried)
     }
 }
 
@@ -515,7 +603,7 @@ impl App {
     }
 
     /// One runner's ceiling, as a worker makes it: her own career's cards and a better parent.
-    pub(crate) fn runner_plan_ceiling(&mut self, plan: &super::track::ParentPlan) -> Vec<Lever> {
+    pub(crate) fn runner_plan_ceiling(&mut self, plan: &super::track::ParentPlan) -> (Vec<Lever>, Tried) {
         let inv = plan.inventory(&self.kb, &self.parent_inventory());
         let now = super::jobs::propose(&self.kb, &plan.goal, &inv);
         let own = self.runner_own_plan(&plan.goal);
@@ -570,7 +658,7 @@ mod tests {
     fn gains_read_in_their_units() {
         assert_eq!(Lever { gain: 8400.0, ..Default::default() }.gain_text(), "+8,400 pts a round");
         assert_eq!(Lever { gain: 2.43, unit: Unit::Lengths, ..Default::default() }.gain_text(), "+2.4 lengths a race");
-        assert_eq!(Lever { gain: 1.0, unit: Unit::Careers, ..Default::default() }.gain_text(), "−1 career");
+        assert_eq!(Lever { gain: 1.0, unit: Unit::Careers, ..Default::default() }.gain_text(), "1 fewer career");
         assert_eq!(Lever { gain: 140.0, unit: Unit::Stats, ..Default::default() }.gain_text(), "+140 stats");
     }
 
@@ -597,7 +685,7 @@ mod tests {
         let p = super::super::jobs::propose(&app.kb, &goal, &inv);
         let plan = super::super::track::ParentPlan::new(goal, &p, &app.veterans(), "2026-10-28");
         let t = std::time::Instant::now();
-        let v = app.runner_plan_ceiling(&plan);
+        let (v, _) = app.runner_plan_ceiling(&plan);
         eprintln!("{} levers in {:.1} s", v.len(), t.elapsed().as_secs_f64());
         for l in &v {
             eprintln!("  {} · {} · {} [{}]", l.gain_text(), l.title, l.why, l.measured);

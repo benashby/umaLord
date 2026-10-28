@@ -190,7 +190,7 @@ impl App {
     }
 
     /// Settings' "Import finished umas", from the Lineage page.
-    fn import_finished_from_downloads(&mut self) {
+    pub(crate) fn import_finished_from_downloads(&mut self) {
         match crate::settings::user_dir("Downloads").map(|d| d.join("data.json")).filter(|p| p.is_file()) {
             Some(path) => {
                 let r = self.import_veterans(&path);
@@ -461,7 +461,7 @@ impl App {
                 }
             }
             if let Some(plan) = &plan {
-                ceiling_hint(ui, plan);
+                ceiling_hint(ui, plan.live_ceiling().as_ref().and_then(|v| v.first()));
             }
             for n in notices.iter().take(1) {
                 ui.add_space(6.0);
@@ -522,7 +522,7 @@ impl App {
                 None => prose(ui, "Fifteen runners over five races, an Ace for each, today's team to beat, and the career that raises it most.", 13.5, p.text),
             }
             if let Some(plan) = &plan {
-                ceiling_hint(ui, plan);
+                ceiling_hint(ui, plan.live_ceiling().as_ref().and_then(|v| v.first()));
             }
         }, |this, ui| this.overview_footer(ui, which, has, LineageView::Tt));
     }
@@ -555,6 +555,7 @@ impl App {
                         None => format!("{} · {} · her lineage is ready: run her own career.", crate::parentage::uma_name(&this.kb, plan.goal.runner), plan.goal.label),
                     };
                     prose(ui, &line, 13.5, p.text);
+                    ceiling_hint(ui, plan.ceiling.as_ref().and_then(|v| v.first()));
                 }
                 None => prose(ui, "One uma and a goal: each parent career it takes to get her there, in order.", 13.5, p.text),
             }
@@ -1045,16 +1046,28 @@ impl App {
     }
 }
 
-/// An Overview card's one line on the plan's best way to raise it.
-fn ceiling_hint(ui: &mut egui::Ui, plan: &TeamPlan) {
-    let Some(l) = plan.ceiling.as_ref().and_then(|v| v.first()) else { return };
+/// An Overview card's one line on the plan's best way to raise it, under a dashed rule.
+fn ceiling_hint(ui: &mut egui::Ui, l: Option<&crate::parentage::ceiling::Lever>) {
+    let Some(l) = l else { return };
     let p = pal(ui);
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Raise the ceiling:").size(12.5).color(p.weak));
-        ui.label(RichText::new(l.gain_text()).size(12.5).color(p.good));
-        ui.label(RichText::new(&l.title).size(12.5));
-    });
+    ui.add_space(6.0);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    let mut x = r.left();
+    while x < r.right() {
+        ui.painter().line_segment([egui::pos2(x, r.top()), egui::pos2((x + 4.0).min(r.right()), r.top())], egui::Stroke::new(1.0, p.weak.gamma_multiply(0.5)));
+        x += 8.0;
+    }
+    ui.add_space(6.0);
+    let mut job = egui::text::LayoutJob::default();
+    let font = |bold: bool| if bold { egui::FontId::new(13.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())) } else { egui::FontId::proportional(13.0) };
+    job.append("↑ Raise the ceiling: ", 0.0, egui::TextFormat { font_id: font(false), color: p.weak, ..Default::default() });
+    job.append(&l.gain_text(), 0.0, egui::TextFormat { font_id: font(true), color: p.good, ..Default::default() });
+    job.append(" · ", 0.0, egui::TextFormat { font_id: font(false), color: p.weak, ..Default::default() });
+    job.append(if l.short.is_empty() { &l.title } else { &l.short }, 0.0, egui::TextFormat { font_id: font(false), color: p.text, ..Default::default() });
+    job.wrap.max_rows = 1;
+    job.wrap.max_width = ui.available_width();
+    job.wrap.break_anywhere = true;
+    ui.label(job).on_hover_text(&l.title);
 }
 
 /// Stages with a tick (or a spinner for the running one), time and lines. Wide, each stage is a

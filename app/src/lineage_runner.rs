@@ -43,7 +43,7 @@ pub(crate) struct RunnerState {
     pub settle_costs: std::collections::HashMap<(usize, u64), f64>,
     /// How to raise the plan: measured on a worker after the plan is made or changed.
     pub ceiling_due: bool,
-    pub ceiling_job: Option<std::sync::mpsc::Receiver<Vec<crate::parentage::ceiling::Lever>>>,
+    pub ceiling_job: Option<std::sync::mpsc::Receiver<(Vec<crate::parentage::ceiling::Lever>, crate::parentage::ceiling::Tried)>>,
 }
 
 impl App {
@@ -160,7 +160,10 @@ impl App {
             },
             |this, ui| {
                 let working = this.lineage.runner.ceiling_job.is_some() || this.lineage.runner.ceiling_due;
-                if this.ceiling_card(ui, "runner", plan.ceiling.as_deref(), working) {
+                this.runner_summary(ui, &plan);
+                ui.add_space(12.0);
+                let fresh = this.plan_ready()[2] == 0;
+                if this.ceiling_card(ui, "runner", plan.ceiling.as_deref(), &plan.tried, fresh, working) {
                     this.lineage.runner.ceiling_due = true;
                 }
                 ui.add_space(12.0);
@@ -260,10 +263,11 @@ impl App {
     fn runner_ceiling_poll(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.lineage.runner.ceiling_job {
             match rx.try_recv() {
-                Ok(v) => {
+                Ok((v, tried)) => {
                     self.lineage.runner.ceiling_job = None;
                     if let Some(plan) = &mut self.lineage.runner.plan {
                         plan.ceiling = Some(v);
+                        plan.tried = tried;
                         if let Some(root) = &self.root {
                             let _ = track::save(root, plan);
                         }

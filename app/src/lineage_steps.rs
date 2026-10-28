@@ -26,6 +26,10 @@ fn meaning(term: &str) -> &'static str {
         "late" => "Late Surger: waits mid-pack and moves up late in the race.",
         "end" => "End Closer: stays at the back and sprints past everyone at the end.",
         "mlb" => "MLB: max limit break (LB4), a support card at full strength. Merging copies of a card raises it; a friend's card you borrow is often MLB.",
+        "pts" => "Points one Team Trials round scores.",
+        "lengths" => "How much farther ahead she finishes, on average, in the simulated races.",
+        "careers" => "Careers fewer to reach the goal, usually.",
+        "stats" => "Her five stats added up at the end of a simulated career.",
         "vet" => "The number is the game's id for one finished uma (its Veteran List entry), so you can tell two of the same uma apart.",
         _ => "",
     }
@@ -141,6 +145,56 @@ pub(crate) struct StepHead {
     pub next: bool,
 }
 
+/// A number tile: the big line, its size and colour, and the line under it (with a hover).
+struct Tile {
+    big: String,
+    size: f32,
+    good: bool,
+    small: String,
+    hover: Option<&'static str>,
+}
+
+impl Tile {
+    fn new(big: String, small: &str) -> Tile {
+        Tile { big, size: 22.0, good: false, small: small.into(), hover: None }
+    }
+    fn size(mut self, s: f32) -> Tile {
+        self.size = s;
+        self
+    }
+    fn good(mut self) -> Tile {
+        self.good = true;
+        self
+    }
+    fn hover(mut self, h: &'static str) -> Tile {
+        self.hover = Some(h);
+        self
+    }
+}
+
+/// Tiles side by side, sharing `width`.
+fn tile_row(ui: &mut egui::Ui, tiles: &[Tile], width: f32) {
+    let p = pal(ui);
+    let n = tiles.len().max(1) as f32;
+    let each = (width - 8.0 * (n - 1.0)) / n;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for t in tiles {
+            ui.allocate_ui_with_layout(vec2(each, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(each);
+                egui::Frame::new().fill(p.raised).corner_radius(10).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(egui::Label::new(semibold(&t.big, t.size).color(if t.good { p.good } else { ui.visuals().strong_text_color() })).wrap());
+                    let r = ui.add(egui::Label::new(RichText::new(&t.small).size(12.5).color(p.weak)).wrap());
+                    if let Some(h) = t.hover {
+                        r.on_hover_text(h);
+                    }
+                });
+            });
+        }
+    });
+}
+
 /// "+5,765" with a real minus.
 fn signed(v: f64) -> String {
     format!("{}{}", if v < 0.0 { "−" } else { "+" }, crate::lineage_kit::thousands(v.abs()))
@@ -189,67 +243,127 @@ impl App {
         }
     }
 
-    /// "What this plan is for": what the event is, where the team stands and what the plan gets.
+    /// "What this plan is for": the event and the plan in a sentence on the left, its numbers
+    /// as three tiles on the right (under the sentence when narrow).
     pub(crate) fn plan_summary(&mut self, ui: &mut egui::Ui, plan: &TeamPlan) {
+        let p = pal(ui);
+        let n = plan.careers.len();
+        let careers = format!("{n} career{}", if n == 1 { "" } else { "s" });
+        let round = |x: f64| crate::lineage_kit::thousands((x / 1000.0).round() * 1000.0);
+        let (mut spans, tiles): (Vec<Span>, Vec<Tile>) = match &plan.built {
+            Built::Tt { team, .. } => {
+                let spans = vec![
+                    Span::b("Team Trials"),
+                    Span::t(" is a weekly event: you enter 15 runners, three in each of five races (Sprint, Mile, Medium, Long, Dirt), and score points by how they place and the skills they show. This plan is "),
+                    Span::b(&careers),
+                    Span::t("; run them in order to raise what your team scores."),
+                ];
+                let tiles = if team.today_total > 0.0 {
+                    vec![
+                        Tile::new(round(team.today_total), "pts a round · today").hover(meaning("today")),
+                        Tile::new(round(team.today_total + team.gain), "after the plan"),
+                        Tile::new(signed((team.gain / 1000.0).round() * 1000.0), "pts a round").good(),
+                    ]
+                } else {
+                    vec![Tile::new(careers.clone(), "to run"), Tile::new("—".into(), "no team today to compare with").hover(meaning("finished"))]
+                };
+                (spans, tiles)
+            }
+            Built::Cm { team, .. } => {
+                let e = &team.event;
+                let parents = plan.careers.iter().filter(|c| !c.own).count();
+                let mut spans = vec![
+                    Span::b(&format!("Champions Meeting {}, the {}", e.id, e.name)),
+                    Span::t(&format!(", is raced on {}. You enter three runners. This plan is ", e.course_name)),
+                    Span::b(&careers),
+                    Span::t(": "),
+                ];
+                if parents > 0 {
+                    let mut fors: Vec<u32> = plan.careers.iter().filter(|c| !c.own).filter_map(|c| c.brief.for_runner).collect();
+                    fors.dedup();
+                    let names = fors.iter().map(|r| crate::parentage::short_name(&self.kb, *r)).collect::<Vec<_>>().join(" and ");
+                    spans.extend([
+                        Span::t(&format!("{} ", if parents == 1 { "one".to_string() } else { parents.to_string() })),
+                        Span::term(if parents == 1 { "parent career" } else { "parent careers" }, "parent"),
+                        Span::t(&format!(" to give {names} the right start, then each runner's ")),
+                    ]);
+                } else {
+                    spans.push(Span::t("each runner's "));
+                }
+                spans.extend([Span::term("own career", "own"), Span::t(".")]);
+                let shares: Vec<f64> = team.runners.iter().filter_map(|r| r.vs_today).collect();
+                let days = crate::tab_planner::days_apart(&e.date, &crate::ui_util::today()).max(0);
+                let mut tiles = Vec::new();
+                if let (Some(t), Some(lo), Some(hi)) = (team.today.first(), shares.iter().copied().reduce(f64::min), shares.iter().copied().reduce(f64::max)) {
+                    tiles.push(Tile::new(format!("#{} {}", t.vet, crate::parentage::short_name(&self.kb, t.outfit)), "your best today").size(18.0).hover("Your best finished uma for this course, as she races now."));
+                    let range = if (hi - lo) < 0.005 { format!("{:.0}%", hi * 100.0) } else { format!("{:.0}–{:.0}%", lo * 100.0, hi * 100.0) };
+                    tiles.push(Tile::new(range, "each planned runner beats her"));
+                }
+                tiles.push(Tile::new(when(&e.date), &format!("Round 1 · in {days} days")));
+                (spans, tiles)
+            }
+        };
+        if plan.basis.vets.is_empty() {
+            spans.push(Span::t(" "));
+            spans.push(Span::t("It's planned for a fresh account: no finished umas were imported.").colored(p.warn));
+        }
+        self.summary_card(ui, &spans, &tiles);
+    }
+
+    /// One runner's summary: her goal and steps in a sentence, the step, careers to go and her
+    /// start as tiles.
+    pub(crate) fn runner_summary(&mut self, ui: &mut egui::Ui, plan: &crate::parentage::track::ParentPlan) {
+        let name = crate::parentage::short_name(&self.kb, plan.goal.runner);
+        let targets: Vec<&str> = plan.goal.targets.iter().map(|t| crate::parentage::APTITUDES[*t]).collect();
+        let aims = match targets.len() {
+            0 => String::new(),
+            1 => targets[0].to_string(),
+            _ => format!("{} and {}", targets[..targets.len() - 1].join(", "), targets[targets.len() - 1]),
+        };
+        let total = plan.steps.len() + 1;
+        let mut spans = vec![Span::b("One runner: "), Span::t(&format!("{name}, aimed at {aims}. This plan is ")), Span::b(&format!("{total} step{}", if total == 1 { "" } else { "s" })), Span::t(": ")];
+        for (i, s) in plan.steps.iter().enumerate() {
+            spans.extend([Span::t(if i == 0 { "a " } else { ", then a " }), Span::term("parent career", "parent"), Span::t(&format!(" of {}", crate::parentage::short_name(&self.kb, s.run.trainee)))]);
+        }
+        spans.extend([Span::t(if plan.steps.is_empty() { "her " } else { ", then her " }), Span::term("own career", "own"), Span::t(".")]);
+        let current = plan.current();
+        let left: u32 = plan.steps.iter().skip(current.unwrap_or(plan.steps.len())).map(|s| crate::parentage::verify::step_spread(s.run.p).0.min(50)).sum::<u32>() + 1;
+        let tiles = vec![
+            Tile::new(format!("step {} of {total}", current.map_or(total, |i| i + 1)), &current.map_or(format!("next: {name}'s own career"), |i| format!("next: {}'s parent career", crate::parentage::short_name(&self.kb, plan.steps[i].run.trainee)))).size(20.0),
+            Tile::new(format!("usually {left} career{}", if left == 1 { "" } else { "s" }), "to go").size(20.0),
+            Tile::new("A".into(), &format!("she starts at A in {aims}")),
+        ];
+        self.summary_card(ui, &spans, &tiles);
+    }
+
+    /// The summary card: the label and sentence, with the tiles beside it from 900 px of card
+    /// width, else under it.
+    fn summary_card(&mut self, ui: &mut egui::Ui, spans: &[Span], tiles: &[Tile]) {
         let p = pal(ui);
         crate::ui_util::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("WHAT THIS PLAN IS FOR").size(12.0).strong().color(p.weak));
-            ui.add_space(6.0);
-            let n = plan.careers.len();
-            let careers = format!("{n} career{}", if n == 1 { "" } else { "s" });
-            let spans = match &plan.built {
-                Built::Tt { team, .. } => {
-                    let mut v = vec![Span::b("Team Trials"), Span::t(" is a weekly event: you enter 15 runners, three in each of five races (Sprint, Mile, Medium, Long, Dirt), and score points by how they place and the skills they show. ")];
-                    if team.today_total > 0.0 {
-                        let round = |x: f64| crate::lineage_kit::thousands((x / 1000.0).round() * 1000.0);
-                        v.extend([
-                            Span::t("Your "),
-                            Span::term("best runners today", "today"),
-                            Span::t(" score about "),
-                            Span::b(&round(team.today_total)),
-                            Span::t(" "),
-                            Span::term("a round", "round"),
-                            Span::t(". This plan is "),
-                            Span::b(&careers),
-                            Span::t("; run them in order and your team should score about "),
-                            Span::b(&round(team.today_total + team.gain)),
-                            Span::t(", "),
-                            Span::b(&format!("{} a round", signed((team.gain / 1000.0).round() * 1000.0))).colored(p.good),
-                            Span::t("."),
-                        ]);
-                    } else {
-                        v.extend([Span::t("This plan is "), Span::b(&careers), Span::t(". None of your finished umas can race these yet, so there's no team today to compare with.")]);
-                    }
-                    v
-                }
-                Built::Cm { team, .. } => {
-                    let e = &team.event;
-                    let parents = plan.careers.iter().filter(|c| !c.own).count();
-                    let mut v = vec![Span::b(&format!("Champions Meeting {}, the {}", e.id, e.name)), Span::t(&format!(" ({}) starts ", e.course_name)), Span::b(&when(&e.date)), Span::t(". You enter three runners. This plan is "), Span::b(&careers), Span::t(": ")];
-                    if parents > 0 {
-                        let mut fors: Vec<u32> = plan.careers.iter().filter(|c| !c.own).filter_map(|c| c.brief.for_runner).collect();
-                        fors.dedup();
-                        let names = fors.iter().map(|r| crate::parentage::short_name(&self.kb, *r)).collect::<Vec<_>>().join(" and ");
-                        v.extend([Span::t(&format!("{} ", if parents == 1 { "one".to_string() } else { parents.to_string() })), Span::term(if parents == 1 { "parent career" } else { "parent careers" }, "parent"), Span::t(&format!(" to give {names} the right start, then each runner's "))]);
-                    } else {
-                        v.push(Span::t("each runner's "));
-                    }
-                    v.extend([Span::term("own career", "own"), Span::t(".")]);
-                    let shares: Vec<f64> = team.runners.iter().filter_map(|r| r.vs_today).collect();
-                    if let (Some(lo), Some(hi), Some(_)) = (shares.iter().copied().reduce(f64::min), shares.iter().copied().reduce(f64::max), team.today.first()) {
-                        let range = if (hi - lo) < 0.005 { format!("{:.0}%", hi * 100.0) } else { format!("{:.0}–{:.0}%", lo * 100.0, hi * 100.0) };
-                        v.extend([Span::t(" Planned this way, each of them beats your "), Span::term("best runner today", "today"), Span::t(&format!(" in {range} of simulated races."))]);
-                    }
-                    v
-                }
+            let w = ui.available_width();
+            let block = (157.0 * tiles.len() as f32).min(470.0).min(w);
+            let text = |ui: &mut egui::Ui, width: f32| {
+                ui.label(RichText::new("WHAT THIS PLAN IS FOR").size(12.0).strong().color(p.weak));
+                ui.add_space(6.0);
+                rich(ui, spans, 15.0, width.min(crate::lineage_page::PROSE_W + 80.0));
             };
-            let mut spans = spans;
-            if plan.basis.vets.is_empty() {
-                spans.push(Span::t(" "));
-                spans.push(Span::t("It's planned for a fresh account: no finished umas were imported.").colored(p.warn));
+            if w >= 900.0 {
+                ui.horizontal_top(|ui| {
+                    let tw = w - block - 24.0;
+                    ui.allocate_ui_with_layout(vec2(tw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_width(tw);
+                        text(ui, tw);
+                    });
+                    ui.add_space(8.0);
+                    tile_row(ui, tiles, block);
+                });
+            } else {
+                text(ui, w);
+                ui.add_space(10.0);
+                tile_row(ui, tiles, w);
             }
-            rich(ui, &spans, 15.0, crate::lineage_page::PROSE_W + 80.0);
         });
     }
 
@@ -626,81 +740,247 @@ impl App {
 }
 
 impl App {
+    /// Open Collection's Add cards with this card picked (for after the player pulls it).
+    fn add_card_dialog(&mut self, id: u32) {
+        self.tab = crate::Tab::Collection;
+        self.collection_tab = crate::CollectionTab::Cards;
+        let mut a = std::mem::take(&mut self.cards.add);
+        a.open = true;
+        self.pick_add_card(&mut a, id);
+        self.cards.add = a;
+    }
+
     /// "How to raise the ceiling": the plan's measured changes, strongest first, five at a time.
     /// `working`: the measurements are still running (One runner's worker); `None`: a plan made
-    /// before they existed, with a button to measure (returns whether it was pressed).
-    pub(crate) fn ceiling_card(&mut self, ui: &mut egui::Ui, key: &str, levers: Option<&[crate::parentage::ceiling::Lever]>, working: bool) -> bool {
-        use crate::parentage::ceiling::LeverKind;
+    /// before they existed, with a button to measure (returns whether it was pressed). A fresh
+    /// account's card starts with importing finished umas.
+    pub(crate) fn ceiling_card(&mut self, ui: &mut egui::Ui, key: &str, levers: Option<&[crate::parentage::ceiling::Lever]>, tried: &crate::parentage::ceiling::Tried, fresh: bool, working: bool) -> bool {
         let p = pal(ui);
         let all = self.lineage.p.ceiling_all.as_deref() == Some(key);
         let mut toggle = false;
         let mut measure = false;
+        let mut import = false;
         crate::ui_util::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(semibold("How to raise the ceiling", 17.0));
-                ui.label(RichText::new("What would raise this plan most, measured while it was made. Each is a separate change; their gains don't simply add up.").size(12.5).color(p.weak));
-            });
+            ui.label(semibold("How to raise the ceiling", 17.0));
+            crate::lineage_page::prose(ui, "What would raise this plan most, measured while it was made. Each one is a separate change; their gains don't simply add up.", 12.5, p.weak);
             ui.add_space(6.0);
             if working {
+                ui.separator();
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new("Trying cards and parents you don't have yet…").size(13.0).color(p.weak));
+                    ui.label(RichText::new("Trying the cards and parents you don't have yet…").size(13.0).color(p.weak));
                 });
                 return;
             }
+            let wide = ui.available_width() >= 900.0;
+            let cols: [f32; 3] = if wide { [112.0, 52.0, 196.0] } else { [92.0, 48.0, 0.0] };
+            if fresh {
+                ui.separator();
+                import = self.ceiling_row(ui, cols, None, wide);
+            }
             let Some(levers) = levers else {
+                ui.separator();
                 crate::lineage_page::prose(ui, "This plan was made before umaLord measured what would raise it.", 13.5, p.weak);
                 let label = if key == "runner" { "Measure it" } else { "Re-plan to measure it" };
                 measure = ui.add(crate::ui_util::primary_button(ui, label, 13.0)).on_hover_text("Runs the simulations that find the umas, cards and parents that would raise the plan most.").clicked();
                 return;
             };
             if levers.is_empty() {
-                crate::lineage_page::prose(ui, "Nothing we tried raised this plan by enough to list: the umas, cards and parents you have already cover it.", 13.5, p.weak);
-                return;
+                ui.separator();
+                ui.label(RichText::new("Nothing we tried raised this plan by enough to list; your account already covers it.").size(14.5));
+                crate::lineage_page::prose(ui, &format!("Tried: {}. Re-plan after a new banner to try again.", tried.text()), 12.5, p.weak);
             }
             let shown = if all { levers.len() } else { levers.len().min(5) };
-            for (k, l) in levers.iter().take(shown).enumerate() {
-                if k > 0 {
-                    ui.separator();
+            for l in levers.iter().take(shown) {
+                ui.separator();
+                self.ceiling_row(ui, cols, Some(l), wide);
+            }
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if levers.len() > 5 && ui.link(semibold(if all { "Show fewer ▲".to_string() } else { format!("Show all ({}) ▾", levers.len()) }, 13.5)).clicked() {
+                    toggle = true;
                 }
-                ui.horizontal_top(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(150.0, 26.0), Sense::hover());
-                    ui.painter().text(r.left_center(), Align2::LEFT_CENTER, l.gain_text(), FontId::new(15.0, egui::FontFamily::Name(crate::theme::SEMIBOLD.into())), p.good);
-                    // The art: the card, else the uma.
-                    match (l.kind, l.card, l.uma) {
-                        (LeverKind::GetCard | LeverKind::LimitBreak, Some(c), _) => {
-                            self.card_art(ui, c, 34.0, false);
-                        }
-                        (_, _, Some(u)) => {
-                            self.avatar(ui, u, 34.0);
-                        }
-                        _ => {}
-                    }
-                    ui.vertical(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(semibold(&l.title, 14.0));
-                            crate::ui_util::pill_padded(ui, RichText::new(&l.measured).size(11.0).color(p.weak), p.raised, Stroke::NONE, vec2(7.0, 2.0)).on_hover_text(match l.kind {
-                                LeverKind::GetUma => "The uma was built as the planner builds your runners (deck, skills, stats) and raced against the plan's runners on the same course.",
-                                LeverKind::GetCard | LeverKind::LimitBreak => "Her career was simulated with the card in her deck, then raced against her career as planned on the same course.",
-                                LeverKind::Parent => "The parent plan was made again with a friend's legacy carrying these sparks, and the careers it needs compared.",
-                            });
-                        });
-                        let mut why = l.why.clone();
-                        if !l.helps.is_empty() {
-                            why.push_str(&format!(" It also helps {}.", l.helps.iter().map(|u| crate::parentage::short_name(&self.kb, *u)).collect::<Vec<_>>().join(", ")));
-                        }
-                        ui.add(egui::Label::new(RichText::new(why).size(12.5).color(p.weak)).wrap());
-                    });
-                });
-            }
-            if levers.len() > 5 && ui.link(if all { "Show fewer".to_string() } else { format!("Show all ({})", levers.len()) }).clicked() {
-                toggle = true;
-            }
+                ui.label(RichText::new("Only umas and cards already out on Global are suggested.").size(12.5).color(p.weak));
+            });
         });
         if toggle {
             self.lineage.p.ceiling_all = if all { None } else { Some(key.to_string()) };
         }
+        if import {
+            self.import_finished_from_downloads();
+        }
         measure
+    }
+
+    /// One row: the gain, the art, what to do and why with how it was measured, and an action.
+    /// `None` is a fresh account's import row; returns whether its import was pressed.
+    fn ceiling_row(&mut self, ui: &mut egui::Ui, cols: [f32; 3], l: Option<&crate::parentage::ceiling::Lever>, wide: bool) -> bool {
+        use crate::parentage::ceiling::{LeverKind, Unit};
+        let p = pal(ui);
+        let mut import = false;
+        let mut add: Option<(LeverKind, u32)> = None;
+        ui.horizontal_top(|ui| {
+            // The gain: the number large, its unit under it.
+            ui.allocate_ui_with_layout(vec2(cols[0], 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(cols[0]);
+                let size = if wide { 26.0 } else { 22.0 };
+                let (num, unit, term) = match l {
+                    None => ("fewer".to_string(), "careers".to_string(), "careers"),
+                    Some(l) => {
+                        let text = l.gain_text();
+                        let (n, u) = text.split_once(' ').map_or((text.clone(), String::new()), |(n, u)| (n.to_string(), u.to_string()));
+                        let term = match l.unit {
+                            Unit::Points => "pts",
+                            Unit::Lengths => "lengths",
+                            Unit::Careers => "careers",
+                            Unit::Stats => "stats",
+                        };
+                        (n, u, term)
+                    }
+                };
+                ui.label(semibold(num, size).color(p.good));
+                rich(ui, &[Span::term(&unit, term).colored(p.weak)], 12.5, cols[0]);
+            });
+            // The art: the uma, the card (with its LB diamonds for a limit break), or the runner.
+            ui.allocate_ui_with_layout(vec2(cols[1], 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.set_width(cols[1]);
+                let w = cols[1] - 8.0;
+                match l {
+                    None => {
+                        let (r, _) = ui.allocate_exact_size(vec2(w, w), Sense::hover());
+                        ui.painter().rect(r, 10.0, p.raised, Stroke::new(1.0, p.weak.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, "↓", FontId::proportional(20.0), p.text);
+                    }
+                    Some(l) => match (l.kind, l.card) {
+                        (LeverKind::GetCard, Some(c)) => {
+                            self.card_art(ui, c, w, false);
+                        }
+                        (LeverKind::LimitBreak, Some(c)) => {
+                            self.card_art(ui, c, w, false);
+                            let (r, resp) = ui.allocate_exact_size(vec2(w, 10.0), Sense::hover());
+                            crate::ui_util::draw_lb(ui.painter(), pos2(r.left() + 2.0, r.center().y), l.lb.unwrap_or(0), 4.5);
+                            resp.on_hover_text(format!("LB{} now; MLB is all four", l.lb.unwrap_or(0)));
+                        }
+                        _ => {
+                            if let Some(u) = l.uma {
+                                self.avatar(ui, u, w);
+                            }
+                        }
+                    },
+                }
+            });
+            let action_w = if wide { cols[2] } else { 0.0 };
+            let text_w = (ui.available_width() - action_w - ui.spacing().item_spacing.x).max(200.0);
+            ui.allocate_ui_with_layout(vec2(text_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(text_w);
+                let (kicker, title, why) = match l {
+                    None => (
+                        "Import your finished umas".to_string(),
+                        "Import your finished umas; plans with them usually need fewer careers.".to_string(),
+                        "This plan can't see any finished umas yet, so every parent in it is a friend's or a new career.".to_string(),
+                    ),
+                    Some(l) => {
+                        let kicker = match l.kind {
+                            LeverKind::GetUma => "Get an uma",
+                            LeverKind::GetCard => "Get a card",
+                            LeverKind::LimitBreak => "Limit-break a card",
+                            LeverKind::Parent => "Borrow or breed a better parent",
+                        };
+                        let mut why = l.why.clone();
+                        if !l.helps.is_empty() {
+                            why.push_str(&format!(" It also helps {}.", l.helps.iter().map(|u| crate::parentage::short_name(&self.kb, *u)).collect::<Vec<_>>().join(", ")));
+                        }
+                        (kicker.to_string(), l.title.clone(), why)
+                    }
+                };
+                let looking = l.is_some_and(|l| l.kind == LeverKind::Parent && self.lineage.look_for.as_deref() == Some(format!("ceiling-parent:{}", l.uma.unwrap_or(0)).as_str()));
+                ui.label(RichText::new(kicker).size(12.5).strong().color(p.weak));
+                ui.add(egui::Label::new(semibold(title, 14.5)).wrap());
+                if let Some(spark) = l.and_then(|l| l.spark.clone()) {
+                    ui.horizontal_wrapped(|ui| {
+                        for part in spark.split(" and ") {
+                            // "End Closer pink 1★": the aptitude and its stars, as the game draws them.
+                            let (name, stars) = part.rsplit_once(" pink ").map_or((part, 1), |(n, s)| (n, s.trim_end_matches('★').parse::<u8>().unwrap_or(1)));
+                            crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::Pink, name, 0, Some(stars), false, true);
+                        }
+                    });
+                }
+                ui.add(egui::Label::new(RichText::new(why).size(13.5)).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(l) = l {
+                        let tag = crate::ui_util::pill_padded(ui, RichText::new(&l.measured).size(12.0).color(p.accent), p.accent.gamma_multiply(0.15), Stroke::new(1.0, p.accent.gamma_multiply(0.55)), vec2(7.0, 3.0));
+                        let compared = l.compared.clone();
+                        tag.on_hover_ui(|ui| {
+                            ui.set_max_width(320.0);
+                            ui.label(semibold("What was compared", 13.0));
+                            ui.add(egui::Label::new(RichText::new(compared).size(12.5)).wrap());
+                        });
+                    }
+                    if !wide {
+                        if let Some(a) = ceiling_action(ui, l) {
+                            match a {
+                                Some(x) => add = Some(x),
+                                None => import = true,
+                            }
+                        }
+                    }
+                });
+                if let (true, Some(l)) = (looking, l) {
+                    ui.add_space(6.0);
+                    egui::Frame::new().fill(p.raised).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(semibold("What to look for in a friend's legacy", 13.5));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("One of:").size(12.5).color(p.weak));
+                            for u in &l.look {
+                                self.avatar(ui, *u, 22.0);
+                                ui.label(RichText::new(crate::parentage::short_name(&self.kb, *u)).size(12.5));
+                            }
+                        });
+                        let spark = l.spark.clone().unwrap_or_default();
+                        let partner = l.partner.map_or(String::new(), |id| format!(", to pair with your #{id}"));
+                        crate::lineage_page::prose(ui, &format!("She must carry {spark} or more, counting her and her two parents{partner}. The characters are ranked by affinity with your runner and her partner. A lineage takes one friend's legacy, and you borrow her again for each career that uses her."), 12.5, p.weak);
+                    });
+                }
+            });
+            if wide {
+                ui.allocate_ui_with_layout(vec2(cols[2], 0.0), egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    ui.set_width(cols[2]);
+                    if let Some(a) = ceiling_action(ui, l) {
+                        match a {
+                            Some(x) => add = Some(x),
+                            None => import = true,
+                        }
+                    }
+                });
+            }
+        });
+        match add {
+            Some((LeverKind::GetUma, _)) => self.open_setup(crate::onboarding::Step::Umas),
+            Some((LeverKind::Parent, u)) => {
+                let key = format!("ceiling-parent:{u}");
+                self.lineage.look_for = if self.lineage.look_for.as_deref() == Some(key.as_str()) { None } else { Some(key) };
+            }
+            Some((_, card)) => self.add_card_dialog(card),
+            None => {}
+        }
+        import
+    }
+}
+
+/// A row's action button: Add or Update in my collection (`Some(Some(kind, id))`), or the fresh
+/// account's import (`Some(None)`); nothing for a parent.
+fn ceiling_action(ui: &mut egui::Ui, l: Option<&crate::parentage::ceiling::Lever>) -> Option<Option<(crate::parentage::ceiling::LeverKind, u32)>> {
+    use crate::parentage::ceiling::LeverKind;
+    match l {
+        None => ui.add(crate::ui_util::primary_button(ui, "Import from the game", 13.0)).clicked().then_some(None),
+        Some(l) => match (l.kind, l.card, l.uma) {
+            (LeverKind::GetUma, _, Some(u)) => ui.button("Add to my collection").on_hover_text("Once you've pulled her: opens the umas you own, to add her.").clicked().then_some(Some((LeverKind::GetUma, u))),
+            (LeverKind::GetCard, Some(c), _) => ui.button("Add to my collection").on_hover_text("Once you've pulled it: opens Add cards with it picked.").clicked().then_some(Some((LeverKind::GetCard, c))),
+            (LeverKind::LimitBreak, Some(c), _) => ui.button("Update in my collection").on_hover_text("Once you've merged copies: opens it in Add cards to set its LB.").clicked().then_some(Some((LeverKind::LimitBreak, c))),
+            (LeverKind::Parent, _, Some(u)) => ui.button("What to look for ▸").on_hover_text("Which friend's legacy to look for, and what she must carry.").clicked().then_some(Some((LeverKind::Parent, u))),
+            _ => None,
+        },
     }
 }
