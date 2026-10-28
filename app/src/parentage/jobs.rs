@@ -12,7 +12,7 @@ use super::outcome::{PINK_STARS, at_least, careers};
 use super::score::{Lineage, pairable, rank, score};
 use super::{APTITUDES, Goal, Inventory, Parent, STATS, after_start, green_spark, pink_spark, ranks};
 use crate::affinity::chara;
-use crate::knowledge::Knowledge;
+use crate::knowledge::{Distance, Knowledge};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -69,6 +69,12 @@ pub struct Run {
     pub legacy_umas: [u32; 2],
     pub must: Vec<Want>,
     pub nice: Vec<Want>,
+    /// G1s worth winning in this career: each one her parents also won adds 3 affinity to that
+    /// link (and a G1 won may leave a race spark, 1 in 5). Name, and how many of her parents won it.
+    pub g1s: Vec<(String, u8)>,
+    /// Stats worth finishing at 1100 or more: a stat there makes its blue spark 2★ or better 80%
+    /// of the time (55% at 600 to 1099). By index (Speed, Stamina, Power, Guts, Wit).
+    pub stat_aims: Vec<usize>,
     /// One career's chance of the must-haves under the lower of the two pink rules (the
     /// cautious one the cap uses), and under the higher (the best case).
     pub p: f64,
@@ -226,7 +232,12 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
                 best = Some((l.fit, l.affinity, run, inv.parents[w].id, l));
             }
         }
-        if let Some((_, _, run, w, l)) = best {
+        if let Some((_, _, mut run, w, l)) = best {
+            // The uma her product pairs with shares a link with her too: its G1s count.
+            let ps: Vec<&Parent> = run.legacies.iter().chain([w].iter()).filter_map(|id| inv.by_id(*id)).collect();
+            if ps.len() == 3 {
+                run.g1s = g1_targets(kb, run.trainee, &ps);
+            }
             out.partner = Some(w);
             out.after = Some(l);
             out.steps.push(run);
@@ -531,8 +542,34 @@ fn to_run(kb: &Knowledge, goal: &Goal, inv: &Inventory, c: &Cand) -> (Run, Paren
             nice.push(Want::Blue { stat, stars: 2 });
         }
     }
-    let run = Run { trainee: c.trainee, legacies: [a.id, b.id], legacy_umas: [a.uma, b.uma], must, nice, p: c.p, p_best: c.p_best };
+    let g1s = g1_targets(kb, c.trainee, &[a, b]);
+    let stat_aims = goal.stats.iter().enumerate().filter(|(_, w)| **w > 0).map(|(i, _)| i).collect();
+    let run = Run { trainee: c.trainee, legacies: [a.id, b.id], legacy_umas: [a.uma, b.uma], must, nice, g1s, stat_aims, p: c.p, p_best: c.p_best };
     (run, Parent::planned(kb, c.trainee, own, a, b))
+}
+
+/// The G1s her parents won that she can run (her surface and distance grades B or better),
+/// most shared first: each adds 3 affinity to every link with a parent that won it.
+fn g1_targets(kb: &Knowledge, trainee: u32, parents: &[&Parent]) -> Vec<(String, u8)> {
+    let Some(info) = kb.umas.get(&trainee) else { return Vec::new() };
+    let r = ranks(&info.aptitude);
+    let mut count: BTreeMap<&str, u8> = BTreeMap::new();
+    for p in parents {
+        for w in &p.legacy.wins {
+            *count.entry(w.as_str()).or_default() += 1;
+        }
+    }
+    let runnable = |name: &str| {
+        kb.races.iter().find(|x| x.name == name && x.grade == "G1").is_some_and(|x| {
+            let s = if x.surface == "Dirt" { 1 } else { 0 };
+            let d = 2 + Distance::ALL.iter().position(|d| *d == Distance::of_metres(x.distance)).unwrap_or(1);
+            r[s] >= 6 && r[d] >= 6
+        })
+    };
+    let mut out: Vec<(String, u8)> = count.into_iter().filter(|(n, _)| runnable(n)).map(|(n, c)| (n.to_string(), c)).collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    out.truncate(5);
+    out
 }
 
 /// A starter step: her career with any two legacies, for the pink her own grades make likely.
@@ -556,7 +593,8 @@ fn starter_run(kb: &Knowledge, goal: &Goal, c: &Cand) -> (Run, Parent) {
             nice.push(Want::Blue { stat, stars: 2 });
         }
     }
-    let run = Run { trainee: c.trainee, legacies: [0, 0], legacy_umas: [0, 0], must, nice, p: c.p, p_best: c.p_best };
+    let stat_aims = goal.stats.iter().enumerate().filter(|(_, w)| **w > 0).map(|(i, _)| i).collect();
+    let run = Run { trainee: c.trainee, legacies: [0, 0], legacy_umas: [0, 0], must, nice, g1s: Vec::new(), stat_aims, p: c.p, p_best: c.p_best };
     let legacy = crate::affinity::Legacy { uma: c.trainee, wins: Default::default(), parents: [None, None] };
     (run, Parent::build(kb, 0, c.trainee, own, [None, None], legacy))
 }

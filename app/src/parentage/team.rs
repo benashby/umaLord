@@ -108,6 +108,10 @@ impl App {
     fn cm_plan(&self, preset: &EventPreset, style: Style, trainee: Option<u32>) -> Plan {
         let mut plan = Plan::default();
         plan.apply_cm(&self.kb, preset);
+        // A later CM's listed scenario may be JP's projection: train in Global's current one.
+        if plan.scenario.is_empty() {
+            plan.scenario = self.kb.current_scenario(&crate::ui_util::today()).unwrap_or_default();
+        }
         plan.style = style;
         plan.trainee = trainee;
         plan.friend_lb = 4;
@@ -295,6 +299,9 @@ mod tests {
                 Ok(team) => {
                     let inv = a.parent_inventory();
                     eprintln!("==== {} ({:.1} s)\n{}", cm.name, t.elapsed().as_secs_f64(), super::super::text::team(&a.kb, &team, &inv));
+                    if let Some(b) = a.cm_next(&team, &inv) {
+                        eprintln!("{}", super::super::brief::text(&a.kb, &b));
+                    }
                     assert!(team.runners.len() <= 3 && !team.runners.is_empty());
                     let charas: std::collections::BTreeSet<u32> = team.runners.iter().map(|r| crate::affinity::chara(r.trainee)).collect();
                     assert_eq!(charas.len(), team.runners.len(), "three different characters");

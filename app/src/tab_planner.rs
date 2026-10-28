@@ -153,7 +153,7 @@ impl Plan {
         self.cm_date = Some(preset.date.clone());
         self.cm_name = Some(preset.name.clone());
         self.umalator_course = Some(preset.course);
-        if let Some(s) = kb.cm_scenario(preset) {
+        if let Some(s) = kb.cm_global_scenario(preset) {
             self.scenario = s.to_string();
         }
         let Some(course) = kb.umalator_courses.iter().find(|c| c.id == preset.course) else {

@@ -851,6 +851,12 @@ impl Knowledge {
     }
 
     /// The training scenario that was (or will be) current for a Champions Meeting, per uma.guide.
+    /// The CM's scenario when it's one Global has: a later CM's listed scenario can be JP's, a
+    /// projection, which a plan for Global must not train in.
+    pub fn cm_global_scenario(&self, preset: &EventPreset) -> Option<&str> {
+        self.cm_scenario(preset).filter(|s| self.scenarios.as_ref().is_none_or(|g| g.scenarios.iter().any(|x| x.matches(s))))
+    }
+
     pub fn cm_scenario(&self, preset: &EventPreset) -> Option<&str> {
         self.cm_schedule
             .iter()
@@ -861,11 +867,11 @@ impl Knowledge {
 
     /// The scenario of the next Champions Meeting from `today`, else the latest one.
     pub fn current_scenario(&self, today: &str) -> Option<String> {
-        let next = self.upcoming_cms(today).into_iter().find_map(|e| self.cm_scenario(e).map(String::from));
+        let next = self.upcoming_cms(today).into_iter().find_map(|e| self.cm_global_scenario(e).map(String::from));
         next.or_else(|| {
             let mut past: Vec<&EventPreset> = self.umalator_presets.iter().filter(|e| e.is_cm()).collect();
             past.sort_by(|a, b| b.date.cmp(&a.date));
-            past.into_iter().find_map(|e| self.cm_scenario(e).map(String::from))
+            past.into_iter().find_map(|e| self.cm_global_scenario(e).map(String::from))
         })
     }
 

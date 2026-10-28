@@ -82,3 +82,65 @@ mod tests {
         assert!(v.best.pctl[2] < v.cautious.pctl[2]);
     }
 }
+
+/// One step in plain numbers: the careers it usually takes (the median) and the unlucky case (1 in
+/// 10 players need this many or more), each career rerolled.
+pub fn step_spread(p: f64) -> (u32, u32) {
+    let q = with_reroll(p);
+    if q >= 1.0 {
+        return (1, 1);
+    }
+    if q <= 0.0 {
+        return (u32::MAX, u32::MAX);
+    }
+    let at = |miss: f64| (miss.ln() / (1.0 - q).ln()).ceil().max(1.0) as u32;
+    (at(0.5), at(0.1))
+}
+
+/// The share of players still going after `n` careers of a step: luck doesn't build up, so the
+/// next career has the same chance whatever came before.
+pub fn still_going(p: f64, n: u32) -> f64 {
+    (1.0 - with_reroll(p)).powi(n as i32)
+}
+
+/// "about 1 in 7" for a chance, rounded to a whole number.
+pub fn one_in(p: f64) -> String {
+    if p >= 0.995 {
+        "every time".into()
+    } else if p <= 0.0 {
+        "never".into()
+    } else {
+        format!("about 1 in {}", (1.0 / p).round().max(1.0) as u32)
+    }
+}
+
+/// A fixed word for a chance: likely (over 2 in 3), even (about half), unlikely (under 1 in 3),
+/// long shot (under 1 in 10).
+pub fn word(p: f64) -> &'static str {
+    if p > 2.0 / 3.0 {
+        "likely"
+    } else if p >= 1.0 / 3.0 {
+        "about even"
+    } else if p >= 0.1 {
+        "unlikely"
+    } else {
+        "a long shot"
+    }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::*;
+
+    #[test]
+    fn plain_numbers() {
+        // 14.7% a career, 27.2% with the reroll: half are done by 3, 1 in 10 need 8 or more.
+        assert_eq!(step_spread(0.147), (3, 8));
+        assert_eq!(step_spread(1.0), (1, 1));
+        assert!((still_going(0.5, 2) - 0.0625).abs() < 1e-12);
+        assert_eq!(one_in(0.147), "about 1 in 7");
+        assert_eq!(word(0.147), "unlikely");
+        assert_eq!(word(0.05), "a long shot");
+        assert_eq!(word(0.8), "likely");
+    }
+}

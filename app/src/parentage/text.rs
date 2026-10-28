@@ -3,7 +3,6 @@
 //! published spark tables, not from a simulation.
 
 use super::jobs::{CAP, Proposal, Run};
-use super::outcome::within;
 use super::score::Lineage;
 use super::track::ParentPlan;
 use super::{APTITUDES, Goal, Inventory, Parent, STATS, green_spark, parent_name, uma_name};
@@ -95,14 +94,31 @@ fn step(kb: &Knowledge, inv: &Inventory, n: usize, r: &Run) -> String {
         out += &format!(" Nice to have: {}.", nice.join(", "));
     }
     out += "\n";
-    if r.p < 1.0 {
+    if !r.g1s.is_empty() {
         out += &format!(
-            "  {} a career (best case {}), about {:.1} careers with the 30 TP spark reroll; {} within {CAP:.0} careers.{}\n",
+            "  G1s to win: {} (each adds 3 affinity to every link with a parent, or the uma she'll pair with, that won it; a G1 win may also leave a race spark, 1 in 5).\n",
+            r.g1s.iter().map(|(n, c)| format!("{n} (+{})", 3 * u32::from(*c))).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if !r.stat_aims.is_empty() {
+        out += &format!("  Stats to aim for: {} at 1100 or more (its blue spark comes 2★ or better 80% of the time, 55% below).\n", r.stat_aims.iter().map(|i| STATS[*i]).collect::<Vec<_>>().join(", "));
+    }
+    if r.p < 1.0 {
+        let (typical, unlucky) = super::verify::step_spread(r.p);
+        out += &format!(
+            "  {} careers hit ({}, {}; best case {}). With the 30 TP spark reroll, usually {typical} career{}; 1 in 10 players need {unlucky} or more.{}\n",
+            super::verify::one_in(r.p),
             pct(r.p),
-            pct(r.p_best),
-            r.careers(),
-            pct(within(r.p, CAP as u32)),
-            if r.careers() > CAP { " ⚠ Past the cap." } else { "" }
+            super::verify::word(r.p),
+            super::verify::one_in(r.p_best),
+            if typical == 1 { "" } else { "s" },
+            if r.careers() > CAP {
+                " ⚠ Past the cap: even the typical case is long.".to_string()
+            } else if unlucky > CAP as u32 {
+                format!(" ⚠ The unlucky 1 in 10 go past {CAP:.0} careers; a borrow or another trainee is worth a look first.")
+            } else {
+                String::new()
+            }
         );
     }
     out
@@ -224,6 +240,16 @@ pub fn plan(kb: &Knowledge, plan: &ParentPlan, inv: &Inventory, vets: &[Veteran]
         out += &format!("No finished {} since step {} began. Import after each career (Settings → Profile → Import finished umas) and the step is checked.", uma_name(kb, run.trainee), cur + 1);
     } else {
         out += &format!("Step {} so far: {} career{} kept since it began (careers whose uma you released don't show).\n", cur + 1, hits.len(), if hits.len() == 1 { "" } else { "s" });
+        if !hits.iter().any(|h| h.must) && run.p < 1.0 {
+            let going = super::verify::still_going(run.p, hits.len() as u32);
+            out += &format!(
+                "Where you stand: {:.0} in 10 players are still going after {} careers here. The next career has the same {} chance; luck doesn't build up.{}\n",
+                going * 10.0,
+                hits.len(),
+                super::verify::one_in(run.p),
+                if going < 0.1 { " You're in the unlucky 1 in 10: settling for your best one, or another trainee, may cost less than carrying on." } else { "" }
+            );
+        }
         for h in &hits {
             let nice: Vec<String> = h.nice.iter().map(|i| run.nice[*i].label(kb)).collect();
             out += &format!(
@@ -337,6 +363,9 @@ pub fn tt(kb: &Knowledge, t: &super::tt::TtTeam) -> String {
                     (false, false) => ", B here: her parents must lift her to A",
                 }
             );
+            for n in &s.notes {
+                out += &format!("      {n}\n");
+            }
         }
         for n in &r.notes {
             out += &format!("  ⚠ {n}\n");
