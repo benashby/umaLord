@@ -644,6 +644,8 @@ mod tests {
             for s in &r.slots {
                 assert!(charas.insert(crate::affinity::chara(s.trainee)), "each character once");
                 assert!(s.plan.friend.is_some() && s.plan.friend_lb == 4);
+                let misfits = a.runner_skill_misfits(&s.plan, &[]);
+                assert!(misfits.is_empty(), "skills that can't help her: {misfits:?}");
             }
         }
     }

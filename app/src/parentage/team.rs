@@ -377,6 +377,8 @@ mod tests {
                     for r in &team.runners {
                         assert!(r.plan.friend.is_some() && r.plan.friend_lb == 4, "a borrowed MLB friend card");
                         assert!(a.roster.umas.iter().any(|u| u.id == r.trainee), "an owned runner");
+                        let misfits = a.runner_skill_misfits(&r.plan, &cm.disabled_skills);
+                        assert!(misfits.is_empty(), "skills that can't help her: {misfits:?}");
                     }
                     // Leave the ace out and pin an owned uma who wasn't picked: both hold.
                     let out = crate::affinity::chara(team.runners[0].trainee);

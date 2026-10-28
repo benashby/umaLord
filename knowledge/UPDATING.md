@@ -55,8 +55,8 @@ These files are written from community guides, each claim with its source and th
 
 The stress suites run on any account folder (`UMALORD_ROOT`); run them on a mature account, one with no finished umas, a small one and a very large one:
 
-- `cargo test --release -- --ignored --nocapture parentage_real_account cm_team_real_account tt_team_real_account parentage_play_through`
-- Invariants they check: every route meets its goal, no legacy is its trainee's character, the 20-career cap holds unless the plan says otherwise, three different characters in a CM team, each character once in a Team Trials team with one Ace per race, and every deck has a borrowed MLB friend card. The play-through compares predicted careers with careers played on rolled sparks.
+- `cargo test --release -- --ignored --nocapture parentage_real_account cm_team_real_account tt_team_real_account parentage_play_through briefs_fit_their_runners`
+- Invariants they check: every route meets its goal, no legacy is its trainee's character, the 20-career cap holds unless the plan says otherwise, three different characters in a CM team, each character once in a Team Trials team with one Ace per race, every deck has a borrowed MLB friend card, every runner's skills can fire in her race, and every parent career's skills fit the runner who'll inherit them as white sparks. The play-through compares predicted careers with careers played on rolled sparks.
 
 ## Sources (current as of 2026-10-28)
 

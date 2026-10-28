@@ -40,6 +40,25 @@ pub struct Brief {
     pub mode: String,
     /// What to set before an Independent Training run: focus, up to 10 prioritized skills, agenda.
     pub setup: Vec<String>,
+    /// The Independent Training agenda: each race, her distance/surface grades ("A/B") and her
+    /// win chance in percent before any streak penalty.
+    pub agenda: Vec<(String, String, u32)>,
+}
+
+/// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
+/// 110 at A or better in both distance and surface, 10 less for each grade below A in either,
+/// less the streak penalty (a third race in a row 10, a fourth 25, a fifth 35, six or more 50).
+/// Grades are `grade_rank`'s (A = 7). An A/A race absorbs a three-race streak.
+pub fn it_win(distance: u8, surface: u8, in_a_row: u32) -> u32 {
+    let below = |r: u8| u32::from(7u8.saturating_sub(r.min(7)));
+    let streak = match in_a_row {
+        0..=2 => 0,
+        3 => 10,
+        4 => 25,
+        5 => 35,
+        _ => 50,
+    };
+    110u32.saturating_sub(10 * (below(distance) + below(surface)) + streak).min(100)
 }
 
 /// Independent Training's training focus for a career's target stamina: Stamina for long
@@ -68,6 +87,40 @@ fn fan_line(kb: &Knowledge, trainee: u32, scenario: &str) -> String {
 const RACING: &str = "Don't run three races in a row if you can help it (a third risks her mood; a fourth costs stats).";
 
 impl App {
+    /// The skills on a runner's plan that can't help her in its race: tied to another style,
+    /// distance, surface or racecourse, or turned off there. Checked from each skill's own
+    /// conditions, apart from the pickers that chose them.
+    pub(crate) fn runner_skill_misfits(&mut self, plan: &Plan, disabled: &[u32]) -> Vec<String> {
+        let saved = std::mem::replace(&mut self.planner.plan, plan.clone());
+        let track = self.plan_race_setup().course.and_then(|c| self.sim_data.as_ref()?.courses.get(&c).map(|c| c.race_track_id));
+        self.planner.plan = saved;
+        plan.skills
+            .iter()
+            .filter_map(|id| {
+                let k = self.kb.skills.get(id)?;
+                let t = k.tags();
+                let why = if disabled.contains(id) {
+                    "turned off in this CM"
+                } else if !t.fits(Some(plan.style), Some(plan.distance), Some(plan.surface)) {
+                    "tied to another style, distance or surface"
+                } else if !t.tracks.is_empty() && track.is_some_and(|tr| !t.tracks.contains(&tr)) {
+                    "tied to another racecourse"
+                } else {
+                    return None;
+                };
+                Some(format!("{} for {} ({} {} {}): {why}", k.name, uma_name(&self.kb, plan.trainee.unwrap_or(0)), plan.surface.label(), plan.distance.label(), plan.style.label()))
+            })
+            .collect()
+    }
+
+    /// Whether a parent's skill is worth having as the runner's white spark: not a debuff, and
+    /// not tied to a style, distance or surface her goal isn't, or to one racecourse.
+    pub(crate) fn white_fits(&self, id: u32, style: Option<Style>, distance: Option<crate::knowledge::Distance>, surface: Option<crate::knowledge::Surface>) -> bool {
+        let Some(k) = self.kb.skills.get(&id) else { return false };
+        let t = k.tags();
+        !self.is_debuff(id) && t.tracks.is_empty() && t.fits(style, distance, surface)
+    }
+
     /// The brief for a parent step of a goal's plan.
     pub(crate) fn parent_brief(&mut self, goal: &Goal, run: &Run, inv: &Inventory, step: usize) -> Brief {
         let kb = &self.kb;
@@ -83,6 +136,10 @@ impl App {
         for i in &run.stat_aims {
             targets[*i] = targets[*i].max(1100);
         }
+        // The runner's goal as the skill filter sees it: targets 0-1 surfaces, 2-5 distances, 6-9 styles.
+        let goal_surface = goal.targets.iter().find(|t| **t < 2).map(|t| crate::knowledge::Surface::ALL[*t]);
+        let goal_distance = goal.targets.iter().find(|t| (2..6).contains(*t)).map(|t| crate::knowledge::Distance::ALL[*t - 2]);
+        let goal_style = goal.targets.iter().find(|t| (6..10).contains(*t)).map(|t| Style::ALL[*t - 6]);
         let saved = std::mem::take(&mut self.planner.plan);
         self.planner.plan = Plan {
             purpose: Purpose::Parent,
@@ -92,8 +149,9 @@ impl App {
             friend_lb: 4,
             pick_objective: crate::skill_opt::PickObjective::Rating,
             scenario: "Trackblazer".into(),
-            // Her skills become white sparks her runner may inherit: no debuffs among them.
-            banned_skills: self.kb.skills.keys().copied().filter(|id| self.is_debuff(*id)).collect(),
+            // Her skills become white sparks her runner may inherit: no debuffs, and none tied
+            // to a style, distance or surface the runner's goal isn't, or to one racecourse.
+            banned_skills: self.kb.skills.values().filter(|k| !self.white_fits(k.id, goal_style, goal_distance, goal_surface)).map(|k| k.id).collect(),
             ..Plan::default()
         };
         self.recommend_deck(true);
@@ -119,13 +177,30 @@ impl App {
             format!("Training focus: {} (a Stamina aim wants Stamina; otherwise Balanced).", if run.stat_aims.contains(&1) { "Stamina" } else { "Balanced" }),
             format!("Prioritized skills (up to 10): {}.", plan.skills.iter().take(10).filter_map(|s| kb.skills.get(s).map(|k| k.name.clone())).collect::<Vec<_>>().join(", ")),
         ];
-        if !run.g1s.is_empty() {
-            setup.push(format!("Agenda: {} (her grades there are B or better, so she wins most of them; avoid three or more races in a row, which cuts the chance).", run.g1s.iter().map(|g| g.0.clone()).collect::<Vec<_>>().join(", ")));
+        // Its races are won on her distance and surface grades alone: her own, before her
+        // parents' pinks (the cautious reading).
+        let agenda: Vec<(String, String, u32)> = run
+            .g1s
+            .iter()
+            .filter_map(|(name, _)| {
+                let race = kb.races.iter().find(|x| &x.name == name && x.grade == "G1")?;
+                let a = &kb.umas.get(&run.trainee)?.aptitude;
+                let surface = if race.surface == "Dirt" { crate::knowledge::Surface::Dirt } else { crate::knowledge::Surface::Turf };
+                let (d, sf) = (a.distance(crate::knowledge::Distance::of_metres(race.distance)), a.surface(surface));
+                Some((name.clone(), format!("{d}/{sf}"), it_win(grade_rank(d), grade_rank(sf), 0)))
+            })
+            .collect();
+        if !agenda.is_empty() {
+            setup.push(format!(
+                "Agenda: {}. Her distance/surface grades set the win chance: an A/A race starts at 110%, so a third race in a row (−10) still wins; a fourth costs 25, a fifth 35, a sixth on 50.",
+                agenda.iter().map(|(n, g, c)| format!("{n} ({g}, ~{c}%)")).collect::<Vec<_>>().join(", ")
+            ));
         }
         setup.push("You still buy the skills at the end, and the spark reroll works as in a manual career.".into());
         Brief {
             mode: "Independent Training".into(),
             setup,
+            agenda,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -166,6 +241,7 @@ impl App {
         // generally much stronger than Independent Training).
         let setup = vec![format!("If you grind her with Independent Training anyway: focus {}, prioritize the first ten skills above, and keep only a run that reaches the stamina floor.", focus(plan.target[1]))];
         Brief {
+            agenda: Vec::new(),
             mode: "Manual career".into(),
             setup,
             why,
@@ -269,16 +345,132 @@ impl App {
 mod tests {
     use super::*;
 
+    /// Every skill a parent's brief recommends (her runner's future white sparks) must fit the
+    /// runner's goal; runners' plans are checked in the team suites (`runner_skill_misfits`):
+    /// `UMALORD_ROOT=<account> cargo test --release briefs_fit_their_runners -- --ignored --nocapture`.
     #[test]
-    fn parent_careers_skip_debuffs() {
+    #[ignore]
+    fn briefs_fit_their_runners() {
+        let root = std::path::PathBuf::from(std::env::var("UMALORD_ROOT").expect("UMALORD_ROOT"));
+        let mut a = App::new(Some(root));
+        let inv = a.parent_inventory();
+        let runners: Vec<u32> = a.roster.umas.iter().map(|u| u.id).collect();
+        let (mut briefs, mut skills, mut bad) = (0, 0, Vec::new());
+        // Every surface × distance × style goal that needs parent careers, each distinct step
+        // once, up to BRIEFS (default 400) briefs.
+        let cap: usize = std::env::var("BRIEFS").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
+        let mut seen = std::collections::BTreeSet::new();
+        'all: for r in runners {
+            for surface in crate::knowledge::Surface::ALL {
+                for distance in crate::knowledge::Distance::ALL {
+                    for style in Style::ALL {
+                        let goal = Goal { runner: r, targets: vec![usize::from(surface == crate::knowledge::Surface::Dirt), 2 + distance as usize, 6 + style as usize], ..Default::default() };
+                        let p = super::super::jobs::propose(&a.kb, &goal, &inv);
+                        for (i, run) in p.steps.iter().enumerate() {
+                            if !seen.insert((run.trainee, run.legacies, surface as u8, distance as u8, style as u8)) {
+                                continue;
+                            }
+                            let b = a.parent_brief(&goal, run, &inv, i);
+                            briefs += 1;
+                            for id in &b.skills {
+                                skills += 1;
+                                let Some(k) = a.kb.skills.get(id) else { continue };
+                                let t = k.tags();
+                                if a.is_debuff(*id) || !t.tracks.is_empty() || !t.fits(Some(style), Some(distance), Some(surface)) {
+                                    bad.push(format!("{} in {}'s career for {} ({} {} {})", k.name, uma_name(&a.kb, run.trainee), uma_name(&a.kb, r), surface.label(), distance.label(), style.label()));
+                                }
+                            }
+                            if briefs >= cap {
+                                break 'all;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("{briefs} parent briefs, {skills} skills checked, {} misfits", bad.len());
+        for m in bad.iter().take(30) {
+            eprintln!("  {m}");
+        }
+        assert!(bad.is_empty());
+    }
+
+    #[test]
+    fn independent_training_wins_on_grades() {
+        // uma.guide's table: A/A 110 (shown as 100), A/B 100, B/B 90, B/C 80; the streak after.
+        assert_eq!(it_win(7, 7, 0), 100);
+        assert_eq!(it_win(8, 7, 3), 100, "an A/A race absorbs a third race in a row");
+        assert_eq!(it_win(7, 7, 4), 85);
+        assert_eq!(it_win(7, 6, 0), 100);
+        assert_eq!(it_win(6, 6, 0), 90);
+        assert_eq!(it_win(6, 5, 3), 70);
+        assert_eq!(it_win(1, 1, 6), 0);
+    }
+
+    fn skill(a: &App, name: &str) -> u32 {
+        a.kb.skills.values().find(|k| k.name == name).unwrap_or_else(|| panic!("no skill {name}")).id
+    }
+
+    #[test]
+    fn white_sparks_must_fit_the_runner() {
+        use crate::knowledge::{Distance, Surface};
+        let a = App::for_tests();
+        let end = (Some(Style::End), Some(Distance::Mile), Some(Surface::Dirt));
+        let fits = |n: &str| a.white_fits(skill(&a, n), end.0, end.1, end.2);
+        // The Gold Ship case: Front Runner and Pace Chaser skills for an End Closer.
+        assert!(!fits("Front Runner Straightaways ○"));
+        assert!(!fits("Pace Chaser Savvy ○"));
+        assert!(!fits("Long Corners ○"), "another distance");
+        assert!(!fits("Hanshin Racecourse ○"), "one racecourse");
+        assert!(!fits("Trick (Front)"), "a debuff");
+        assert!(fits("End Closer Savvy ○"));
+        assert!(fits("Corner Recovery ○"), "a skill for any race");
+    }
+
+    /// Every parent brief, for every style, distance and surface a runner could want, recommends
+    /// only skills that runner can use (her future white sparks). On the bundled sample roster,
+    /// so plain `cargo test` covers it; `briefs_fit_their_runners` does the same on real accounts.
+    #[test]
+    fn parent_careers_skip_skills_the_runner_cant_use() {
         let mut a = App::for_tests();
         let trainee = a.roster.umas[0].id;
         let runner = a.roster.umas.iter().map(|u| u.id).find(|id| crate::affinity::chara(*id) != crate::affinity::chara(trainee)).unwrap();
-        let goal = Goal { runner, targets: vec![0, 4], ..Default::default() };
-        let run = Run { trainee, legacies: [0, 0], ..Default::default() };
         let inv = a.parent_inventory();
-        let b = a.parent_brief(&goal, &run, &inv, 1);
-        assert!(!b.skills.is_empty(), "skills to target");
-        assert!(b.skills.iter().all(|s| !a.is_debuff(*s)), "no debuffs: they'd become the runner's white sparks");
+        let run = Run { trainee, legacies: [0, 0], ..Default::default() };
+        let mut checked = 0;
+        for surface in crate::knowledge::Surface::ALL {
+            for distance in crate::knowledge::Distance::ALL {
+                for style in Style::ALL {
+                    let goal = Goal { runner, targets: vec![usize::from(surface == crate::knowledge::Surface::Dirt), 2 + distance as usize, 6 + style as usize], ..Default::default() };
+                    let b = a.parent_brief(&goal, &run, &inv, 0);
+                    assert!(!b.skills.is_empty(), "skills to target for {surface:?} {distance:?} {style:?}");
+                    for id in &b.skills {
+                        let k = &a.kb.skills[id];
+                        let t = k.tags();
+                        assert!(!a.is_debuff(*id) && t.tracks.is_empty() && t.fits(Some(style), Some(distance), Some(surface)), "{} for a {surface:?} {distance:?} {style:?} runner", k.name);
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "{checked} skills checked");
+    }
+
+    #[test]
+    fn runner_misfits_are_named() {
+        use crate::knowledge::{Distance, Surface};
+        let mut a = App::for_tests();
+        let plan = Plan {
+            trainee: Some(a.roster.umas[0].id),
+            style: Style::End,
+            distance: Distance::Long,
+            surface: Surface::Turf,
+            skills: vec![skill(&a, "Front Runner Straightaways ○"), skill(&a, "Mile Corners ○"), skill(&a, "Corner Recovery ○"), skill(&a, "Long Corners ○")],
+            ..Plan::default()
+        };
+        let off = skill(&a, "Long Corners ○");
+        let m = a.runner_skill_misfits(&plan, &[off]);
+        assert_eq!(m.len(), 3, "{m:?}");
+        assert!(m[0].contains("Front Runner") && m[1].contains("Mile Corners") && m[2].contains("turned off"), "{m:?}");
     }
 }
