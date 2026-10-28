@@ -49,6 +49,10 @@ Sources, read 2026-10-28: uma.guide, Team Trials (Global, updated 2026-10-05); u
 - July 2026 raised stat caps per scenario and made gains past 1200 count about half (not 1/8; Game8, July 2026 Balance Adjustments); Power past 1200 enables Fully Charged. Exact caps per scenario: GameTora's July 2026 rebalance guide.
 - Later JP scenarios (Grandmasters and on) aren't on Global; a future CM's listed JP scenario is a projection.
 
+## Manual or Independent Training
+
+Global's Independent Training (`mechanics.md`) runs a career by itself: use it for parent careers, sparks and farming; run CM aces and Team Trials runners by hand, since manual careers come out much stronger (Cygames). umaLord's career briefs say which, and what to set for an Independent Training run.
+
 ## How the assistant picks the mode
 
 When the user names a goal, use its section. When they ask broadly ("help me get competitive"), cover the next CM (the deadline), Team Trials (the weekly score, the steady reward), and the parenting that serves both, since one good parent line feeds every mode. Say which mode each recommendation is for.

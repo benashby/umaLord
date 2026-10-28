@@ -36,6 +36,22 @@ pub struct Brief {
     pub races: Vec<String>,
     /// Keep her if…
     pub keep: Vec<String>,
+    /// Independent Training (the 50-minute background career) or a manual career, and why.
+    pub mode: String,
+    /// What to set before an Independent Training run: focus, up to 10 prioritized skills, agenda.
+    pub setup: Vec<String>,
+}
+
+/// Independent Training's training focus for a career's target stamina: Stamina for long
+/// races, Sprint for short ones, Balanced between (uma.guide, Independent Training).
+fn focus(stamina: u32) -> &'static str {
+    if stamina >= 900 {
+        "Stamina"
+    } else if stamina <= 650 {
+        "Sprint"
+    } else {
+        "Balanced"
+    }
 }
 
 /// The unique's fan counts for her, by whether she's a Dirt uma (higher Dirt grade than Turf).
@@ -95,7 +111,19 @@ impl App {
         }
         keep.extend(run.nice.iter().map(|w| format!("Nice to have: {}", w.label(kb))));
         keep.push("Use the 30 TP spark reroll on a run that's close.".into());
+        // Parents: sparks are what count, so Independent Training (Global since 2026-07-22) does
+        // the grind; its races are won on distance and surface grades alone.
+        let mut setup = vec![
+            format!("Training focus: {} (a Stamina aim wants Stamina; otherwise Balanced).", if run.stat_aims.contains(&1) { "Stamina" } else { "Balanced" }),
+            format!("Prioritized skills (up to 10): {}.", plan.skills.iter().take(10).filter_map(|s| kb.skills.get(s).map(|k| k.name.clone())).collect::<Vec<_>>().join(", ")),
+        ];
+        if !run.g1s.is_empty() {
+            setup.push(format!("Agenda: {} (her grades there are B or better, so she wins most of them; avoid three or more races in a row, which cuts the chance).", run.g1s.iter().map(|g| g.0.clone()).collect::<Vec<_>>().join(", ")));
+        }
+        setup.push("You still buy the skills at the end, and the spark reroll works as in a manual career.".into());
         Brief {
+            mode: "Independent Training".into(),
+            setup,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -132,7 +160,12 @@ impl App {
             format!("Keep her if she reaches the stats above{} and learns the skills listed.", stamina_floor.as_ref().map_or(String::new(), |(f, _)| format!(" (Stamina {f} at the least)"))),
             "Skills you can't afford by the end: the ones listed first matter most.".into(),
         ];
+        // Runners race on their stats and skills: a manual career (Cygames: manual runs are
+        // generally much stronger than Independent Training).
+        let setup = vec![format!("If you grind her with Independent Training anyway: focus {}, prioritize the first ten skills above, and keep only a run that reaches the stamina floor.", focus(plan.target[1]))];
         Brief {
+            mode: "Manual career".into(),
+            setup,
             why,
             trainee,
             style: plan.style,
@@ -156,12 +189,14 @@ pub fn text(kb: &Knowledge, b: &Brief) -> String {
     let skills: Vec<String> = b.skills.iter().filter_map(|s| kb.skills.get(s).map(|k| k.name.clone())).collect();
     let article = if b.style == Style::End { "an" } else { "a" };
     let mut out = format!("Next career: {} as {article} {}. {}\n", uma_name(kb, b.trainee), b.style.label(), b.why);
+    out += &format!("- How: {}{}\n", b.mode, if b.mode == "Manual career" { " (a runner races on her stats and skills; manual careers are generally much stronger)" } else { " (50 minutes in the background; sparks are what this career is for)" });
     out += &format!("- Parents: {}.\n- Scenario: {}.\n", b.parents, b.scenario);
     out += &format!("- Deck: {}; borrow {friend}.\n", deck.join(", "));
     out += &format!("- Skills to target: {}.\n", if skills.is_empty() { "none picked yet".to_string() } else { skills.join(", ") });
     out += &format!("- Stats: {}\n", b.stat_notes.join(" "));
     out += &format!("- Races: {}\n", b.races.join(" "));
     out += &format!("- Keep: {}\n", b.keep.join(" "));
+    out += &format!("- Set up: {}\n", b.setup.join(" "));
     out
 }
 
