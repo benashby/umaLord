@@ -12,6 +12,7 @@ mod ask_claude_code;
 mod ask_opencode;
 mod career;
 mod data;
+mod datapack;
 mod charts;
 mod collection_kit;
 mod course_notes;
@@ -710,6 +711,11 @@ pub(crate) struct App {
     pub settings: settings_page::SettingsState,
     /// The live Champions Meeting schedule (official news and Umalator), refreshed in the background.
     pub live: live::LiveState,
+    /// The weekly game-data pack (`datapack.rs`): the check in flight, and what the last one said.
+    pub pack: Option<std::sync::mpsc::Receiver<Result<datapack::Outcome, String>>>,
+    pub pack_status: Option<String>,
+    /// The pack check has been considered this launch.
+    pub pack_tried: bool,
     /// Home's derived data and daily picks.
     pub home: home::HomeState,
     /// UMALORD_RAIL: start with the Collection filters folded, for screenshots.
@@ -825,6 +831,9 @@ impl App {
             onboarding: Default::default(),
             settings: Default::default(),
             live: Default::default(),
+            pack: None,
+            pack_status: None,
+            pack_tried: false,
             home: Default::default(),
             debug_rail: false,
             debug_extra: false,
@@ -1009,6 +1018,44 @@ impl App {
         app.roster = Roster::sample();
         app.onboarding.open = false;
         app
+    }
+
+    /// Start the weekly game-data pack check (once a launch, when it's due and fetching is
+    /// allowed), or `now` from Settings; and take its result.
+    pub(crate) fn pack_check(&mut self, ctx: &egui::Context, now: bool) {
+        let live = std::env::var("UMALORD_LIVE").ok();
+        if cfg!(test) || self.pack.is_some() || live.as_deref().is_some_and(|v| v != "fetch") || std::env::var_os("UMALORD_SCREENSHOT").is_some() {
+            return;
+        }
+        let Some(root) = self.root.clone() else { return };
+        if now || (live::enabled() && datapack::due(&ui_util::today())) {
+            self.pack = Some(datapack::spawn(root, ctx.clone()));
+        }
+    }
+
+    fn pack_poll(&mut self, ctx: &egui::Context) {
+        if !self.pack_tried {
+            self.pack_tried = true;
+            self.pack_check(ctx, false);
+        }
+        let Some(rx) = &self.pack else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        self.pack = None;
+        match result {
+            Ok(datapack::Outcome::UpToDate { built }) => {
+                settings::set("data_pack_checked", serde_json::json!(ui_util::today()));
+                self.pack_status = Some(format!("Up to date (pack built {}).", &built[..built.len().min(10)]));
+            }
+            Ok(datapack::Outcome::Updated { built, files }) => {
+                settings::set("data_pack_checked", serde_json::json!(ui_util::today()));
+                let art = files.iter().filter(|f| f.ends_with(".webp")).count();
+                let msg = format!("Game data updated from the weekly pack (built {}): {} data files, {art} pictures.", &built[..built.len().min(10)], files.len() - art);
+                self.reload();
+                self.toast(&msg, ui_util::ToastKind::Info);
+                self.pack_status = Some(msg);
+            }
+            Err(e) => self.pack_status = Some(format!("Couldn't check the weekly pack: {e}")),
+        }
     }
 
     fn reload(&mut self) {
@@ -1714,6 +1761,7 @@ impl App {
         // Art for every uma and card in the data, downloaded in the background.
         self.sweep_art();
         self.pump_art(&ctx);
+        self.pack_poll(&ctx);
         let p = theme::palette(self.dark);
         egui::Panel::top("top_bar")
             .frame(egui::Frame::new().fill(p.surface).inner_margin(Margin::symmetric(14, 9)))

@@ -7,6 +7,7 @@ The game changes: new umas and cards every few weeks, a Champions Meeting every 
 | Data | From | How often | Where it lands |
 |---|---|---|---|
 | Champions Meeting schedule, conditions, turned-off skills | umamusume.com's official news; Umalator's presets | on launch, when over 6 hours old (`live.rs`) | the app's cache (`events.json`) |
+| Every uma, card, skill and race, and their art (the weekly pack) | `.github/workflows/data-pack.yml`: runs `tools/update_knowledge.py` and the tests every Monday, then `tools/make_data_pack.py` publishes the "data-pack" release | weekly, only files whose SHA-256 differs (`datapack.rs`; Settings → Data and updates → Weekly pack, Check now) | the data folder's `knowledge/data/` and `app/assets/` |
 | Art for every released uma and card in the data | uma.guide (icons, card thumbnails) | once per launch, for what's missing (`tab_cards::sweep_art`) | the data folder's `app/assets/` |
 | Affinity, spark and win-record tables | uma.guide's data chunk | weekly (`live.rs`, `spawn_affinity`) | the app's cache; `knowledge/data/{affinity,sparks,saddles}.json` are the bundled copies |
 
