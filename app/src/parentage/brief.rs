@@ -54,6 +54,9 @@ pub struct Brief {
     pub legacies: Vec<(u64, u32)>,
     pub p: Option<f64>,
     pub focus: Option<String>,
+    /// A parent step's number (from 1) and the runner it's for.
+    pub step: Option<usize>,
+    pub for_runner: Option<u32>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -218,6 +221,8 @@ impl App {
             legacies: if run.legacies == [0, 0] { Vec::new() } else { run.legacies.iter().zip(run.legacy_umas).map(|(id, uma)| (*id, if uma == 0 { inv.by_id(*id).map_or(0, |p| p.uma) } else { uma })).collect() },
             p: Some(run.p),
             focus: Some(if run.stat_aims.contains(&1) { "Stamina" } else { "Balanced" }.to_string()),
+            step: Some(step + 1),
+            for_runner: Some(goal.runner),
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -266,6 +271,8 @@ impl App {
             legacies: Vec::new(),
             p: None,
             focus: Some(focus(plan.target[1]).to_string()),
+            step: None,
+            for_runner: None,
             mode: "Manual career".into(),
             setup,
             why,

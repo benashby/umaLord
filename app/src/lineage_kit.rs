@@ -95,10 +95,10 @@ pub fn stars(painter: &egui::Painter, center: Pos2, r: f32, have: u8, wanted: Op
 pub fn spark_chip(ui: &mut egui::Ui, kind: Spark, name: &str, have: u8, wanted: Option<u8>, near_miss: bool, compact: bool) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     let (left, right, border, text) = kind.colors(dark);
-    let h = if compact { 24.0 } else { 34.0 };
+    let h = if compact { 26.0 } else { 34.0 };
     let font = FontId::new(if compact { 12.0 } else { 14.5 }, FontFamily::Name(crate::theme::SEMIBOLD.into()));
     let galley = ui.painter().layout_no_wrap(name.to_string(), font.clone(), text);
-    let stars_w = if compact { 3.0 * 2.15 * 5.0 + 6.0 } else { 0.0 };
+    let stars_w = if compact { 3.0 * 2.15 * 6.5 + 6.0 } else { 0.0 };
     let w = (h * 0.95 + galley.size().x + stars_w + if compact { 10.0 } else { 26.0 }).max(if compact { 90.0 } else { 150.0 });
     let below = if compact { 0.0 } else { 9.0 };
     let (outer, resp) = ui.allocate_exact_size(vec2(w, h + below), Sense::hover());
@@ -136,7 +136,7 @@ pub fn spark_chip(ui: &mut egui::Ui, kind: Spark, name: &str, have: u8, wanted: 
     p.circle_filled(sc + vec2(-sr * 0.3, -sr * 0.3), sr * 0.35, Color32::from_white_alpha(200));
     p.galley(pos2(sc.x + sr + 6.0, rect.center().y - galley.size().y / 2.0), galley, text);
     if compact {
-        stars(p, pos2(rect.right() - 6.0 - 2.15 * 5.0 - 5.0, rect.center().y), 5.0, have, wanted, near_miss);
+        stars(p, pos2(rect.right() - 6.0 - 2.15 * 6.5 - 6.5, rect.center().y), 6.5, have, wanted, near_miss);
     } else {
         stars(p, pos2(rect.center().x, rect.bottom() + 1.0), 7.0, have, wanted, near_miss);
     }
