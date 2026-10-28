@@ -258,9 +258,10 @@ fn build_registry() -> Vec<ToolSpec> {
     let skills = || json!({"type": "array", "items": {"type": "string"}, "description": "Skill names or ids"});
     let purposes = json!({"type": "string", "enum": ["Champions Meeting", "Team Trials", "Parent run", "League of Heroes", "Other"]});
     let wins = json!({"type": "array", "items": {"type": "string"}, "description": "The G1 races it won, by their exact names in the game data (find_races finds them, e.g. 'Tokyo Yushun (Japanese Derby)'); leave out for none"});
-    let ancestor = obj(json!({"uma": {"type": "string"}, "g1_wins": wins}), &["uma"]);
+    let sparks = json!({"type": "array", "items": {"type": "string"}, "description": "For a hypothetical uma (a parent run not done yet): its sparks as the game names them, like \"Dirt 2★\", \"Speed 3★\" or a unique's name with its stars"});
+    let ancestor = obj(json!({"uma": {"type": "string"}, "g1_wins": wins, "sparks": sparks}), &["uma"]);
     let legacy = obj(
-        json!({"finished": {"type": "integer", "description": "One of the account's finished umas by its #id (list_finished_umas): its G1 wins and parents come from the import; leave uma, g1_wins and parents out"}, "uma": {"type": "string"}, "g1_wins": wins, "parents": {"type": "array", "maxItems": 2, "items": ancestor}}),
+        json!({"finished": {"type": "integer", "description": "One of the account's finished umas by its #id (list_finished_umas): its sparks, G1 wins and parents come from the import; leave uma, g1_wins, sparks and parents out"}, "uma": {"type": "string"}, "g1_wins": wins, "sparks": sparks, "parents": {"type": "array", "maxItems": 2, "items": ancestor}}),
         &[],
     );
     vec![
@@ -286,6 +287,28 @@ fn build_registry() -> Vec<ToolSpec> {
             "Worked out affinity",
             "Affinity between a trainee and one or two legacies (parents), each with up to two of its own parents (the trainee's grandparents) and the G1 races each won, from the game's own relation tables. Gives each slot's own affinity, which its sparks roll with (chance = base × (1 + affinity/100)), its parts (relation groups shared with the trainee, the trios through each grandparent, the two legacies' link, +3 per G1 both members of a link won), and the lineage total with the game's symbol (◎ over 150, ○ 51–150, △ 50 or less; the symbol is for the lineage, not one slot). Any outfit of a character gives the same affinity. Wins left out count as none.",
             obj(json!({"trainee": {"type": "string", "description": "The uma to train: name, outfit or id"}, "legacies": {"type": "array", "minItems": 1, "maxItems": 2, "items": legacy.clone()}}), &["trainee", "legacies"]),
+        ),
+        spec(
+            "parent_run_odds",
+            Read,
+            "🌱",
+            "Worked out a parent run's odds",
+            "What one parent career of an owned uma makes, with the odds and expected careers: her pink spark (picked evenly among the aptitudes she finishes at A or S: give `legacies` to count the ones her lineage raises at the start), her blue (stat 1 in 5, stars by its final value: give `final_stats`), her green if she's 3★+ (stars by rank: `rank_ss`, default true), and how white sparks are made. Each with the careers to expect, plain and with the 30 TP reroll. Use it for every run in a parent-run queue.",
+            obj(
+                json!({"uma": {"type": "string", "description": "The owned uma to run as the parent"}, "legacies": {"type": "array", "maxItems": 2, "items": legacy.clone()}, "final_stats": stats_arg("Her expected final stats"), "rank_ss": {"type": "boolean"}}),
+                &["uma"],
+            ),
+        ),
+        spec(
+            "plan_lineage",
+            Read,
+            "🌱",
+            "Worked out a lineage",
+            "What a lineage gives a trainee, computed exactly: at the start (fixed) each aptitude after the six umas' pink stars (1–3 stars +1 grade, 4–6 +2, 7–9 +3, 10+ +4, never past A), the stats their blue sparks add, and the legacies' inherited uniques; then each slot's chance of firing each pink and green spark over the two April inspirations, and its expected white hints. Legacies are the account's finished umas ({\"finished\": id}) or hypothetical ones with `sparks` (to test a parent run before doing it). `target` marks the aptitudes the goal needs and says how many pink stars reach A. Use it instead of doing spark arithmetic.",
+            obj(
+                json!({"trainee": {"type": "string"}, "legacies": {"type": "array", "minItems": 1, "maxItems": 2, "items": legacy.clone()}, "target": {"type": "object", "properties": {"surface": surface.clone(), "distance": distance.clone(), "style": style.clone()}, "additionalProperties": false}}),
+                &["trainee", "legacies"],
+            ),
         ),
         spec(
             "rank_legacies",
@@ -551,6 +574,8 @@ mod tests {
             ("rank_legacies", json!({"trainee": "Oguri Cap", "with": "Gold Ship", "top_n": 5})),
             ("rank_legacies", json!({"trainee": "Oguri Cap", "finished": true, "top_n": 3})),
             ("list_finished_umas", json!({"kind": "pink", "min_stars": 2})),
+            ("parent_run_odds", json!({"uma": "Oguri Cap [Starlight Beat]", "legacies": [{"finished": 8}], "final_stats": [1200, 600, 900, 500, 700]})),
+            ("plan_lineage", json!({"trainee": "Oguri Cap [Starlight Beat]", "legacies": [{"finished": 7}, {"uma": "Haru Urara", "sparks": ["Dirt 2 ★", "Speed ★★★", "Escapades 2★", "Victoria por plancha☆ 1★"], "parents": [{"uma": "Gold Ship", "sparks": ["Dirt 1★"]}]}], "target": {"surface": "Dirt", "distance": "Mile", "style": "End"}})),
             ("set_plan", json!({"style": "Pace", "target_stats": [1200, 1000, 1000, 600, 1000], "ground": "Good", "meta_influence": "tie-break"})),
             ("get_plan", json!({})),
             ("set_deck", json!({"cards": ["Kitasan Black"], "friend": "none"})),

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::{Approval, Exec, Kind, OpenAt, SimSetup, Snapshot, ToolOut, Visual, Wait};
 use crate::App;
-use crate::knowledge::{Distance, EventPreset, Style, Surface, grade_rank};
+use crate::knowledge::{Distance, EventPreset, SparkInfo, Style, Surface, grade_rank};
 use crate::onboarding::Edit;
 use crate::tab_planner::{Plan, Purpose};
 use crate::tab_sim::{ExtraKind, Mode};
@@ -185,6 +185,64 @@ impl App {
             out += &format!("\nNot in the affinity tables (newer than them, counted as 0): {}.", unknown.join(", "));
         }
         out
+    }
+
+    /// The trainee and lineage a get_affinity or plan_lineage input names, with each legacy's
+    /// spark ids for itself and its two parents: a finished uma brings its own; a hypothetical
+    /// slot takes `sparks` like "Dirt 2★".
+    fn read_lineage(&self, input: &Value) -> Result<(u32, [Option<crate::affinity::Legacy>; 2], [[Vec<u32>; 3]; 2]), String> {
+        if self.kb.affinity.is_empty() {
+            return Err("The affinity tables aren't loaded (knowledge/data/affinity.json).".into());
+        }
+        let trainee = self.find_character(input["trainee"].as_str().unwrap_or_default())?;
+        let mut legacies: [Option<crate::affinity::Legacy>; 2] = [None, None];
+        let mut sparks: [[Vec<u32>; 3]; 2] = Default::default();
+        let finished = self.veterans();
+        for (i, l) in input["legacies"].as_array().into_iter().flatten().take(2).enumerate() {
+            if let Some(id) = l["finished"].as_u64() {
+                let v = finished.iter().find(|v| v.trained_chara_id == id).ok_or(format!("No finished uma #{id}; list_finished_umas lists them."))?;
+                legacies[i] = Some(v.legacy(&self.kb));
+                sparks[i] = [v.factors(), v.ancestor(10).map(|a| a.factors()).unwrap_or_default(), v.ancestor(20).map(|a| a.factors()).unwrap_or_default()];
+                continue;
+            }
+            if l["uma"].as_str().is_none() {
+                return Err("Each legacy needs an uma, or a finished uma's #id as finished.".into());
+            }
+            let mut legacy = crate::affinity::Legacy { uma: self.find_character(l["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&l["g1_wins"])?, parents: [None, None] };
+            sparks[i][0] = self.spark_ids(&l["sparks"])?;
+            for (j, g) in l["parents"].as_array().into_iter().flatten().take(2).enumerate() {
+                legacy.parents[j] = Some(crate::affinity::Ancestor { uma: self.find_character(g["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&g["g1_wins"])? });
+                sparks[i][j + 1] = self.spark_ids(&g["sparks"])?;
+            }
+            legacies[i] = Some(legacy);
+        }
+        Ok((trainee, legacies, sparks))
+    }
+
+    /// Spark ids from "Dirt 2★" / "Speed 3*" / "Angling and Scheming 2★" (stars default to 1).
+    fn spark_ids(&self, v: &Value) -> Result<Vec<u32>, String> {
+        let mut out = Vec::new();
+        for text in v.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            // "Dirt 2★", "Dirt 2 ★", "Dirt ★★", "Dirt 2*", or a name alone (1★).
+            let t = text.trim();
+            let stem = t.trim_end_matches(['★', '*', ' ']);
+            let marks = t[stem.len()..].chars().filter(|c| matches!(c, '★' | '*')).count();
+            let (name, stars) = match stem.rsplit_once(' ') {
+                Some((n, s)) if s.parse::<u8>().is_ok() => (n.trim(), s.parse::<u8>().unwrap_or(1)),
+                _ => (stem, if marks > 1 { marks as u8 } else { 1 }),
+            };
+            // The game's spelling first, then ignoring spaces and case ("Victoria por plancha☆"), then
+            // a name the game prefixes ("Escapades" for "564 Escapades").
+            let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+            let want = squash(name);
+            let at = |f: &dyn Fn(&SparkInfo) -> bool| self.kb.sparks.values().filter(|s| s.stars == stars && f(s)).min_by_key(|s| s.id);
+            let s = at(&|s| s.name.eq_ignore_ascii_case(name))
+                .or_else(|| at(&|s| squash(&s.name) == want))
+                .or_else(|| at(&|s| squash(&s.name).ends_with(&want) && want.len() >= 5))
+                .ok_or(format!("No spark called \"{text}\" (write a name as the game does, like \"Dirt 2★\" or \"Speed 3★\")."))?;
+            out.push(s.id);
+        }
+        Ok(out)
     }
 
     /// A finished uma's sparks by colour: "Blue: Speed 3★. Pink: Turf 2★. Green: … White: …".
@@ -615,28 +673,82 @@ impl App {
                 Ok(self.explain_card_text(id))
             }
             "get_affinity" => {
-                let trainee = self.find_character(input["trainee"].as_str().unwrap_or_default())?;
-                let mut legacies: [Option<crate::affinity::Legacy>; 2] = [None, None];
-                let finished = self.veterans();
-                for (i, l) in input["legacies"].as_array().into_iter().flatten().take(2).enumerate() {
-                    if let Some(id) = l["finished"].as_u64() {
-                        let v = finished.iter().find(|v| v.trained_chara_id == id).ok_or(format!("No finished uma #{id}; list_finished_umas lists them."))?;
-                        legacies[i] = Some(v.legacy(&self.kb));
-                        continue;
-                    }
-                    if l["uma"].as_str().is_none() {
-                        return Err("Each legacy needs an uma, or a finished uma's #id as finished.".into());
-                    }
-                    let mut legacy = crate::affinity::Legacy { uma: self.find_character(l["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&l["g1_wins"])?, parents: [None, None] };
-                    for (j, g) in l["parents"].as_array().into_iter().flatten().take(2).enumerate() {
-                        legacy.parents[j] = Some(crate::affinity::Ancestor { uma: self.find_character(g["uma"].as_str().unwrap_or_default())?, wins: self.g1_wins(&g["g1_wins"])? });
-                    }
-                    legacies[i] = Some(legacy);
-                }
-                if self.kb.affinity.is_empty() {
-                    return Err("The affinity tables aren't loaded (knowledge/data/affinity.json).".into());
-                }
+                let (trainee, legacies, _) = self.read_lineage(input)?;
                 Ok(self.affinity_text(trainee, &legacies))
+            }
+            "parent_run_odds" => {
+                let uma = self.find_uma_id(input["uma"].as_str().unwrap_or_default())?;
+                let info = self.kb.umas.get(&uma).ok_or("Unknown uma.")?;
+                let stars = self.owned_uma(uma).map(|u| u.stars).ok_or(format!("{} [{}] isn't owned, so she can't be trained.", info.name, info.outfit))?;
+                // Her aptitudes at A or S after the start, given the lineage she'd run with.
+                let mut grades: Vec<(&str, String)> = [
+                    ("Turf", &info.aptitude.turf),
+                    ("Dirt", &info.aptitude.dirt),
+                    ("Sprint", &info.aptitude.sprint),
+                    ("Mile", &info.aptitude.mile),
+                    ("Medium", &info.aptitude.medium),
+                    ("Long", &info.aptitude.long),
+                    ("Front Runner", &info.aptitude.front),
+                    ("Pace Chaser", &info.aptitude.pace),
+                    ("Late Surger", &info.aptitude.late),
+                    ("End Closer", &info.aptitude.end),
+                ]
+                .into_iter()
+                .map(|(n, g)| (n, g.clone()))
+                .collect();
+                let mut lineage_note = String::new();
+                if input["legacies"].is_array() {
+                    let mut lin = input.clone();
+                    lin["trainee"] = json!(input["uma"]);
+                    let (_, _, sparks) = self.read_lineage(&lin)?;
+                    let mut pinks: std::collections::BTreeMap<String, u32> = Default::default();
+                    for s in sparks.iter().flatten().flatten().filter_map(|id| self.kb.sparks.get(id)).filter(|s| s.kind == "pink") {
+                        *pinks.entry(s.name.clone()).or_default() += u32::from(s.stars);
+                    }
+                    for (n, g) in grades.iter_mut() {
+                        let raised = crate::lineage::after_start(g, pinks.get(*n).copied().unwrap_or(0)).to_string();
+                        if raised != *g {
+                            lineage_note += &format!(" Her lineage raises {n} {g}→{raised} at the start, which adds it to her pink pool.");
+                            *g = raised;
+                        }
+                    }
+                }
+                let a: Vec<&str> = grades.iter().filter(|(_, g)| crate::knowledge::grade_rank(g) >= 7).map(|(n, _)| *n).collect();
+                let stats: [u32; 5] = std::array::from_fn(|i| input["final_stats"].get(i).and_then(Value::as_u64).unwrap_or(800) as u32);
+                let ss = input["rank_ss"].as_bool().unwrap_or(true);
+                let mut out = crate::lineage::parent_run_report(&format!("{} [{}]", info.name, info.outfit), stars, &a, stats, ss);
+                out += &lineage_note;
+                if input["final_stats"].is_null() {
+                    out += " (Final stats assumed 800 each; pass final_stats for the blue odds of a planned build.)";
+                }
+                Ok(out)
+            }
+            "plan_lineage" => {
+                let (trainee, legacies, sparks) = self.read_lineage(input)?;
+                let lineage = self.kb.affinity.lineage(trainee, &legacies);
+                let mut slots = Vec::new();
+                for (i, l) in legacies.iter().enumerate() {
+                    let (Some(l), Some(a)) = (l, &lineage.legacies[i]) else { continue };
+                    let spark_list = |ids: &[u32]| ids.iter().filter_map(|id| self.kb.sparks.get(id)).collect::<Vec<_>>();
+                    slots.push(crate::lineage::Slot { label: format!("Legacy {}: {}", i + 1, self.character_name(l.uma)), legacy: true, sparks: spark_list(&sparks[i][0]), affinity: a.total() });
+                    for (j, gp) in l.parents.iter().enumerate() {
+                        if let Some(gp) = gp {
+                            slots.push(crate::lineage::Slot { label: format!("Legacy {}'s parent: {}", i + 1, self.character_name(gp.uma)), legacy: false, sparks: spark_list(&sparks[i][j + 1]), affinity: a.grandparent(j) });
+                        }
+                    }
+                }
+                let t = &input["target"];
+                let target: Vec<&str> = [t["surface"].as_str(), t["distance"].as_str(), t["style"].as_str().map(|s| match s {
+                    "Front" => "Front Runner",
+                    "Pace" => "Pace Chaser",
+                    "Late" => "Late Surger",
+                    "End" => "End Closer",
+                    other => other,
+                })]
+                .into_iter()
+                .flatten()
+                .collect();
+                Ok(format!("{}\n\nLineage total affinity: {} {}.", crate::lineage::report(&self.kb, trainee, &slots, &target), lineage.total(), crate::affinity::symbol(lineage.total())))
             }
             "rank_legacies" => {
                 let t = &self.kb.affinity;

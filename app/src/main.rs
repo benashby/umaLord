@@ -18,6 +18,7 @@ mod course_notes;
 mod digest;
 mod home;
 mod knowledge;
+mod lineage;
 mod live;
 mod meta;
 mod notes;
