@@ -14,6 +14,11 @@ use crate::ui_util::semibold;
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Stroke, pos2, vec2};
 use std::sync::mpsc::{Receiver, channel};
 
+/// The two-pane breakpoint, the action pane's width and the gap (LINEAGE-LAYOUT-DECISIONS.md).
+const WIDE: f32 = 1200.0;
+const ACTION_W: f32 = 480.0;
+const PANE_GAP: f32 = 24.0;
+
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(crate) enum LineageView {
     #[default]
@@ -67,14 +72,12 @@ impl App {
         egui::Panel::top("lineage_bar")
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 18, top: 12, bottom: 10 }))
             .show(ui, |ui| self.lineage_bar(ui));
-        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 12 })).show(ui, |ui| {
-            egui::ScrollArea::vertical().id_salt("lineage_scroll").auto_shrink([false, false]).show(ui, |ui| match self.lineage.view {
-                LineageView::Cm => self.lineage_cm(ui),
-                LineageView::Tt => self.lineage_tt(ui),
-                LineageView::Runner => {
-                    ui.label(RichText::new("One runner's plan comes next.").color(pal(ui).weak));
-                }
-            });
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 12 })).show(ui, |ui| match self.lineage.view {
+            LineageView::Cm => self.lineage_cm(ui),
+            LineageView::Tt => self.lineage_tt(ui),
+            LineageView::Runner => {
+                ui.label(RichText::new("One runner's plan comes next.").color(pal(ui).weak));
+            }
         });
     }
 
@@ -151,7 +154,40 @@ impl App {
 
     /// Whether the page is still building (screenshots wait for it).
     pub(crate) fn lineage_busy(&self, now: f64) -> bool {
-        self.lineage.job.is_some() || self.lineage.done_at.is_some_and(|t| now - t < 2.0)
+        self.lineage.job.is_some() || self.lineage.done_at.is_some_and(|t| now - t < 0.5)
+    }
+
+    /// The page's two layouts, chosen once from the page's width (LINEAGE-LAYOUT-DECISIONS.md):
+    /// at 1200 px and wider, a fixed 480 px action pane (the Next career card) beside the
+    /// overview, each scrolling on its own so the setup stays in view; narrower, one column,
+    /// the card first.
+    fn panes(&mut self, ui: &mut egui::Ui, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
+        let wide = ui.available_width() >= WIDE;
+        head(self, ui);
+        ui.add_space(8.0);
+        if wide {
+            let h = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(ACTION_W, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(ACTION_W);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    egui::ScrollArea::vertical().id_salt("lineage_action").auto_shrink([false, false]).show(ui, |ui| action(self, ui));
+                });
+                ui.add_space(PANE_GAP);
+                let rest = ui.available_width();
+                ui.allocate_ui_with_layout(vec2(rest, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(rest);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    egui::ScrollArea::vertical().id_salt("lineage_overview").auto_shrink([false, false]).show(ui, |ui| overview(self, ui));
+                });
+            });
+        } else {
+            egui::ScrollArea::vertical().id_salt("lineage_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                action(self, ui);
+                ui.add_space(12.0);
+                overview(self, ui);
+            });
+        }
     }
 
     fn building(&self, ui: &mut egui::Ui, what: &str) {
@@ -177,25 +213,32 @@ impl App {
             return;
         };
         let (team, next, queue) = (team.clone(), next.clone(), queue.clone());
-        let e = &team.event;
-        ui.horizontal(|ui| {
-            ui.label(semibold(format!("CM {} {} team", e.id, e.name), size::XL));
-            pill(ui, &e.course_name, pal(ui).accent);
-            ui.label(RichText::new(format!("{} · {} days away{}", e.date, team.days_left, if e.announced { "" } else { " (estimated)" })).size(13.0).color(pal(ui).weak));
-        });
-        ui.add_space(8.0);
-        if let Some(b) = &next {
-            self.next_card(ui, &b.clone());
-            ui.add_space(12.0);
-        }
-        self.today_row(ui, &team);
-        ui.add_space(12.0);
-        self.runner_cards(ui, &team);
-        ui.add_space(12.0);
-        self.queue_card(ui, &queue, &team);
-        for n in &team.notes {
-            ui.label(RichText::new(format!("⚠ {n}")).size(12.5).color(pal(ui).warn));
-        }
+        self.panes(
+            ui,
+            |_, ui| {
+                let e = &team.event;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(semibold(format!("CM {} {} team", e.id, e.name), size::XL));
+                    pill(ui, &e.course_name, pal(ui).accent);
+                    ui.label(RichText::new(format!("{} · {} days away{}", e.date, team.days_left, if e.announced { "" } else { " (estimated)" })).size(13.0).color(pal(ui).weak));
+                });
+            },
+            |this, ui| {
+                if let Some(b) = &next {
+                    this.next_card(ui, b);
+                }
+            },
+            |this, ui| {
+                this.today_row(ui, &team);
+                ui.add_space(12.0);
+                this.runner_cards(ui, &team);
+                ui.add_space(12.0);
+                this.queue_card(ui, &queue, &team);
+                for n in &team.notes {
+                    ui.label(RichText::new(format!("⚠ {n}")).size(12.5).color(pal(ui).warn));
+                }
+            },
+        );
     }
 
     fn lineage_tt(&mut self, ui: &mut egui::Ui) {
@@ -214,16 +257,27 @@ impl App {
         let (team, next, lengths) = (team.clone(), next.clone(), lengths.clone());
         let p = pal(ui);
         let runners: usize = team.rows.iter().map(|r| r.slots.len()).sum();
-        ui.horizontal(|ui| {
-            ui.label(semibold(format!("Team Trials · {runners} runners"), size::XL));
-            pill(ui, &format!("{} races × 3", team.rows.len()), p.accent);
-        });
-        ui.label(RichText::new("Each race: what you can field today, the plan, and the gain on it.").size(13.0).color(p.weak));
-        ui.add_space(8.0);
-        if let Some(b) = &next {
-            self.next_card(ui, &b.clone());
-            ui.add_space(12.0);
-        }
+        let next2 = next.clone();
+        self.panes(
+            ui,
+            |_, ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(semibold(format!("Team Trials · {runners} runners"), size::XL));
+                    pill(ui, &format!("{} races × 3", team.rows.len()), p.accent);
+                    ui.label(RichText::new("Each race: what you can field today, the plan, and the gain on it.").size(13.0).color(p.weak));
+                });
+            },
+            |this, ui| {
+                if let Some(b) = &next2 {
+                    this.next_card(ui, b);
+                }
+            },
+            |this, ui| this.tt_overview(ui, &team, &next, &lengths),
+        );
+    }
+
+    fn tt_overview(&mut self, ui: &mut egui::Ui, team: &TtTeam, next: &Option<Brief>, lengths: &[String]) {
+        let p = pal(ui);
         if team.today_total > 0.0 {
             crate::ui_util::card(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -261,7 +315,7 @@ impl App {
                     ui.label(RichText::new("Gain").size(12.0).strong().color(p.weak));
                 });
             });
-            for (row, len) in team.rows.iter().zip(&lengths) {
+            for (row, len) in team.rows.iter().zip(lengths) {
                 ui.separator();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(vec2(race_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -347,7 +401,8 @@ impl App {
 
     fn runner_cards(&self, ui: &mut egui::Ui, team: &CmTeam) {
         let n = team.runners.len().max(1);
-        let narrow = ui.available_width() < 1100.0;
+        // Three across from 900 px of overview (about 290 px a card), else stacked.
+        let narrow = ui.available_width() < 900.0;
         let draw = |ui: &mut egui::Ui, r: &crate::parentage::team::Runner, ace: bool| {
             crate::ui_util::card(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -448,6 +503,8 @@ impl App {
         let wide = ui.available_width() >= 1100.0;
         egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.5, p.accent)).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let narrow_card = ui.available_width() < 700.0;
+            let mut start = false;
             // Who and why.
             ui.horizontal(|ui| {
                 self.avatar(ui, b.trainee, 64.0);
@@ -475,15 +532,29 @@ impl App {
                     });
                     ui.label(RichText::new(&b.why).size(13.0).color(p.weak));
                 });
-                let btn_w = 170.0;
-                ui.add_space((ui.available_width() - btn_w).max(0.0));
-                ui.vertical(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("📋 Start this career").color(p.on_accent)).fill(p.accent).min_size(vec2(btn_w, 30.0))).on_hover_text("Fills in Career → Plan with this card: trainee, style, scenario, deck with the borrowed card, and skills").clicked() {
-                        self.start_career_from(b);
+                if !narrow_card {
+                    let btn_w = 170.0;
+                    ui.add_space((ui.available_width() - btn_w).max(0.0));
+                    ui.vertical(|ui| {
+                        if ui.add(egui::Button::new(RichText::new("📋 Start this career").color(p.on_accent)).fill(p.accent).min_size(vec2(btn_w, 30.0))).on_hover_text("Fills in Career → Plan with this card: trainee, style, scenario, deck with the borrowed card, and skills").clicked() {
+                            start = true;
+                        }
+                        ui.label(RichText::new("Prefills Career → Plan").size(11.5).color(p.weak));
+                    });
+                }
+            });
+            if narrow_card {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("📋 Start this career").color(p.on_accent)).fill(p.accent).min_size(vec2(170.0, 30.0))).on_hover_text("Fills in Career → Plan with this card: trainee, style, scenario, deck with the borrowed card, and skills").clicked() {
+                        start = true;
                     }
                     ui.label(RichText::new("Prefills Career → Plan").size(11.5).color(p.weak));
                 });
-            });
+            }
+            if start {
+                self.start_career_from(b);
+            }
             ui.add_space(10.0);
             // How.
             label_row(ui, "HOW", |ui| {
@@ -515,12 +586,15 @@ impl App {
                     ui.label(semibold(&b.scenario, 13.5));
                 });
                 label_row(ui, "DECK", |ui| {
+                    // Six to a row, as large as the row allows (72 px at most, the design's size).
+                    let art = ((ui.available_width() - 5.0 * 8.0) / 6.0).clamp(40.0, 72.0);
                     ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         for c in &b.deck {
-                            this.card_art(ui, *c, 72.0, false);
+                            this.card_art(ui, *c, art, false);
                         }
                         if let Some(f) = b.friend {
-                            this.card_art(ui, f, 72.0, true);
+                            this.card_art(ui, f, art, true);
                         }
                     });
                     if let Some(f) = b.friend.and_then(|f| this.kb.cards.get(&f)) {
@@ -549,13 +623,6 @@ impl App {
                                     ui.label(RichText::new(format!("+{} affinity", 3 * links)).size(12.0).color(p.weak));
                                 }
                             });
-                        }
-                        ui.label(RichText::new("Each G1 her parents also won adds 3 affinity to that link; a G1 win may leave a race spark.").size(12.0).color(p.weak));
-                    });
-                } else {
-                    label_row(ui, "RACES", |ui| {
-                        for r in &b.races {
-                            ui.add(egui::Label::new(RichText::new(r).size(12.5)).wrap());
                         }
                     });
                 }
@@ -590,6 +657,18 @@ impl App {
                 left(self, ui);
                 right(self, ui);
             }
+            // How races work, for when it's needed: collapsed, remembered (decision 4).
+            ui.separator();
+            remembered_section(ui, "races_help", "How races work in this career", false, |ui| {
+                ui.set_max_width(640.0);
+                for r in b.races.iter().filter(|r| !r.starts_with("Win ")) {
+                    ui.add(egui::Label::new(RichText::new(r).size(12.5)).wrap());
+                }
+                if !b.agenda.is_empty() {
+                    ui.add(egui::Label::new(RichText::new("Each G1 her parents also won adds 3 affinity to that link; a G1 win may leave a race spark.").size(12.5)).wrap());
+                    ui.add(egui::Label::new(RichText::new("Independent Training wins races on surface and distance grades alone: A/A starts at 110%, 10 less per grade below A, shown capped at 100%; a 3rd / 4th / 5th / 6th race in a row costs 10 / 25 / 35 / 50. In a manual career a 3rd race in a row risks her mood, a 4th her stats.").size(12.5)).wrap());
+                }
+            });
             // Odds.
             if let Some(pp) = b.p {
                 ui.separator();
@@ -615,8 +694,11 @@ impl App {
                 ui.label(RichText::new("Same order as the game's screen: copy it across, top to bottom.").size(12.0).color(p.weak));
             });
             ui.add_space(6.0);
-            let key = ui.make_persistent_id(("it_ticks", b.trainee, b.skills.len()));
-            let mut ticks: Vec<bool> = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| vec![false; b.skills.len().min(10)]);
+            // Ticks last through the 50-minute run and app restarts, per plan (decision 7).
+            let plan_key = format!("{}:{:?}", b.trainee, &b.skills[..b.skills.len().min(10)]);
+            let mut all: std::collections::BTreeMap<String, Vec<bool>> = crate::collection_kit::setting(ui.ctx(), "lineage_ticks");
+            let mut ticks: Vec<bool> = all.get(&plan_key).cloned().filter(|t| t.len() == b.skills.len().min(10)).unwrap_or_else(|| vec![false; b.skills.len().min(10)]);
+            let before = ticks.clone();
             let focus = b.focus.clone().unwrap_or_else(|| "Balanced".into());
             let cols = if ui.available_width() >= 900.0 { 3 } else { 1 };
             let mut draw = |ui: &mut egui::Ui, part: usize| match part {
@@ -630,13 +712,15 @@ impl App {
                 }
                 1 => {
                     ui.label(RichText::new(format!("PRIORITIZED SKILLS · {} of {} entered", ticks.iter().filter(|t| **t).count(), ticks.len())).size(11.5).strong().color(p.weak));
-                    egui::Grid::new(("it_skills", b.trainee)).num_columns(2).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+                    let two = ui.available_width() >= 520.0;
+                    let colw = if two { (ui.available_width() - 12.0) / 2.0 } else { ui.available_width() };
+                    egui::Grid::new(("it_skills", b.trainee)).num_columns(if two { 2 } else { 1 }).spacing(vec2(12.0, 4.0)).max_col_width(colw).show(ui, |ui| {
                         for (i, s) in b.skills.iter().take(10).enumerate() {
                             let name = self.kb.skills.get(s).map_or(s.to_string(), |k| k.name.clone());
                             let text = RichText::new(format!("{} {name}", i + 1)).size(12.5);
                             let done = ticks[i];
                             crate::ui_util::UiExt::tick(ui, &mut ticks[i], if done { text.strikethrough().color(p.weak) } else { text });
-                            if i % 2 == 1 {
+                            if !two || i % 2 == 1 {
                                 ui.end_row();
                             }
                         }
@@ -654,7 +738,7 @@ impl App {
                             pill(ui, &format!("{grades} · ~{chance}%"), if *chance >= 90 { p.good } else { p.warn });
                         });
                     }
-                    ui.label(RichText::new("Won on surface and distance grades alone: A/A starts at 110%, 10 less per grade below A, shown capped at 100%. Independent Training: −10 / −25 / −35 / −50 for a 3rd / 4th / 5th / 6th race in a row. Manual: a 3rd race in a row risks her mood, a 4th her stats.").size(11.5).color(p.weak));
+                    ui.label(RichText::new("Won on her grades alone; see How races work, below.").size(12.0).color(p.weak));
                 }
             };
             if cols == 3 {
@@ -669,7 +753,12 @@ impl App {
                     ui.add_space(6.0);
                 }
             }
-            ui.data_mut(|d| d.insert_temp(key, ticks));
+            if ticks != before {
+                // Keep only this plan's ticks: a new plan starts fresh.
+                all.clear();
+                all.insert(plan_key, ticks);
+                crate::collection_kit::set_setting(ui.ctx(), "lineage_ticks", all);
+            }
         });
     }
 
@@ -774,7 +863,8 @@ impl App {
                     self.avatar(ui, it.uma, 24.0);
                     ui.add(egui::Label::new(RichText::new(&it.name).size(13.0)).wrap_mode(egui::TextWrapMode::Extend));
                     if !it.note.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(&it.note).size(12.0).color(it.note_color)).wrap_mode(egui::TextWrapMode::Extend));
+                        let ink = crate::lineage_kit::ink(it.note_color, pal(ui).raised);
+                        ui.add(egui::Label::new(RichText::new(&it.note).size(12.0).color(ink)).wrap_mode(egui::TextWrapMode::Extend));
                     }
                     ui.add_space(gap - 6.0);
                 }
@@ -791,6 +881,30 @@ fn queue_row(app: &App, inv: &crate::parentage::Inventory, runner: u32, run: &cr
     let style = app.kb.umas.get(&run.trainee).map(|u| u.aptitude.best_style().label()).unwrap_or("").to_string();
     let (typical, _) = crate::parentage::verify::step_spread(run.p);
     QueueRow { trainee: run.trainee, for_runner: runner, what, legacies, careers: format!("usually {typical} career{}", if typical == 1 { "" } else { "s" }), style }
+}
+
+/// A section that opens and closes, remembered across launches in settings.json
+/// (`lineage_open`), since eframe's persistence is off (decision 13).
+fn remembered_section(ui: &mut egui::Ui, key: &str, title: &str, default_open: bool, body: impl FnOnce(&mut egui::Ui)) {
+    use egui::collapsing_header::{CollapsingState, paint_default_icon};
+    let saved: std::collections::BTreeMap<String, bool> = crate::collection_kit::setting(ui.ctx(), "lineage_open");
+    let open = saved.get(key).copied().unwrap_or(default_open);
+    let mut st = CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id(("lineage_open", key)), open);
+    let was = st.is_open();
+    let weak = pal(ui).weak;
+    let header = ui.horizontal(|ui| {
+        st.show_toggle_button(ui, paint_default_icon);
+        ui.add(egui::Label::new(RichText::new(title).size(13.0).color(weak)).sense(Sense::click()))
+    });
+    if header.inner.clicked() {
+        st.toggle(ui);
+    }
+    if st.is_open() != was {
+        let mut all = saved;
+        all.insert(key.to_string(), st.is_open());
+        crate::collection_kit::set_setting(ui.ctx(), "lineage_open", all);
+    }
+    st.show_body_unindented(ui, body);
 }
 
 /// A labelled row: the label in a fixed column, the content beside it in the rest of the width
@@ -834,11 +948,12 @@ fn pills(ui: &mut egui::Ui, items: &[String], color: Color32) {
     }
 }
 
-/// A small rounded label.
+/// A small rounded label: one widget, so it wraps whole in a wrapping row.
 fn pill(ui: &mut egui::Ui, text: &str, color: Color32) {
-    egui::Frame::new().fill(color.gamma_multiply(0.16)).stroke(Stroke::new(1.0, color.gamma_multiply(0.55))).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(8, 2)).show(ui, |ui| {
-        ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap_mode(egui::TextWrapMode::Extend));
-    });
+    // Drawn on its own tint over the raised surface (the darkest it sits on); text reaches 4.5:1 there.
+    let fill = crate::lineage_kit::tint(color, pal(ui).raised, 0.16);
+    let ink = crate::lineage_kit::ink(color, fill);
+    crate::ui_util::pill(ui, RichText::new(text).size(12.0).color(ink), fill, Stroke::new(1.0, color.gamma_multiply(0.55)));
 }
 
 fn note_is_replace(uma: &u32, next: &Option<Brief>) -> bool {

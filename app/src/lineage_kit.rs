@@ -177,3 +177,45 @@ pub fn segmented(ui: &mut egui::Ui, options: &[&str], picked: &str, accent: Colo
         });
     });
 }
+
+/// `color` as small text on `bg`, adjusted until it reaches WCAG's 4.5:1 (darker on light
+/// backgrounds, lighter on dark ones), so tinted pills and raised panels stay legible in both
+/// themes (LINEAGE-LAYOUT-DECISIONS.md, decision 6).
+pub fn ink(color: Color32, bg: Color32) -> Color32 {
+    let light_bg = crate::theme::contrast(bg, Color32::BLACK) > crate::theme::contrast(bg, Color32::WHITE);
+    let mut c = color;
+    for _ in 0..24 {
+        if crate::theme::contrast(c, bg) >= 4.5 {
+            break;
+        }
+        c = if light_bg {
+            Color32::from_rgb((f32::from(c.r()) * 0.9) as u8, (f32::from(c.g()) * 0.9) as u8, (f32::from(c.b()) * 0.9) as u8)
+        } else {
+            c.lerp_to_gamma(Color32::WHITE, 0.1)
+        };
+    }
+    c
+}
+
+/// A tint of `color` over `base`, as a pill's fill is drawn.
+pub fn tint(color: Color32, base: Color32, a: f32) -> Color32 {
+    base.lerp_to_gamma(Color32::from_rgb(color.r(), color.g(), color.b()), a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ink_reaches_aa_on_every_surface() {
+        for dark in [false, true] {
+            let p = crate::theme::palette(dark);
+            for fg in [p.weak, p.gold, p.good, p.warn, p.accent] {
+                for bg in [p.surface, p.raised, p.hover, tint(fg, p.raised, 0.16)] {
+                    let c = ink(fg, bg);
+                    assert!(crate::theme::contrast(c, bg) >= 4.5, "{fg:?} on {bg:?} ({}): {}", if dark { "dark" } else { "light" }, crate::theme::contrast(c, bg));
+                }
+            }
+        }
+    }
+}

@@ -1713,7 +1713,7 @@ impl App {
             }
         }
         let simulating = self.sim.job.is_some() || self.planner.skill_job.is_some() || self.planner.pick_job.is_some() || self.sim.extra.is_some() || self.debug_extra;
-        let installing = self.ask.oc.install_rx.is_some() || simulating || self.lineage_busy(ctx.input(|i| i.time)) || (self.tab == Tab::Lineage && ctx.input(|i| i.time) < 4.0);
+        let installing = self.ask.oc.install_rx.is_some() || simulating || self.lineage_busy(ctx.input(|i| i.time)) || (self.tab == Tab::Lineage && ctx.has_pending_images()) || (self.tab == Tab::Lineage && ctx.input(|i| i.time) < 4.0);
         // UMALORD_ASK=<question>: ask it on start, and hold the screenshot until it's answered.
         if !installing && let Some(q) = self.debug_question.take() {
             self.tab = Tab::Ask;
