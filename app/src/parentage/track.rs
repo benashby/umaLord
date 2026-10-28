@@ -395,7 +395,21 @@ impl ParentPlan {
 
     /// Work the remaining steps out again from what the account has now.
     pub fn revalidate(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], today: &str) -> String {
-        let p = super::jobs::propose_pinned(kb, &self.goal, &self.inventory(kb, inv), &self.pin);
+        let inv2 = self.inventory(kb, inv);
+        let mut p = super::jobs::propose_pinned(kb, &self.goal, &inv2, &self.pin);
+        // Keep the step already planned when it's still as cheap: a re-plan shouldn't swap the
+        // player's next career for a costlier one with a slightly better final lineage.
+        let next = self.steps.iter().find(|s| !s.finished()).map(|s| s.run.clone());
+        if let Some(next) = next.filter(|n| self.pin.trainee.is_none() && !self.pin.avoid.iter().any(|a| a.matches(n.trainee, n.legacies)))
+            && !p.now.as_ref().is_some_and(super::score::Lineage::meets)
+            && p.steps.first().is_some_and(|s| s.trainee != next.trainee)
+        {
+            let keep = super::jobs::propose_pinned(kb, &self.goal, &inv2, &Pin { trainee: Some(next.trainee), ..self.pin.clone() });
+            let cost = |q: &Proposal| q.steps.iter().map(Run::careers).sum::<f64>();
+            if !keep.steps.is_empty() && !keep.over_cap && keep.impossible.is_empty() && cost(&keep) <= cost(&p) {
+                p = keep;
+            }
+        }
         let old = self.remaining();
         let done: Vec<Step> = self.steps.iter().filter(|s| s.finished()).cloned().collect();
         let after = newest(vets);

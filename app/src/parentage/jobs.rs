@@ -136,7 +136,7 @@ impl Avoid {
         Avoid { trainee: run.trainee, legacies: run.legacies }
     }
 
-    fn matches(&self, trainee: u32, ids: [u64; 2]) -> bool {
+    pub fn matches(&self, trainee: u32, ids: [u64; 2]) -> bool {
         self.trainee == trainee && (self.legacies == ids || self.legacies == [ids[1], ids[0]])
     }
 }
@@ -291,9 +291,12 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
         steps.sort_by(|x, y| y.careers().total_cmp(&x.careers()));
         out.steps = steps;
     }
-    // Nothing under the cap: try two generations, step 1's product as one of step 2's parents.
-    if (out.over_cap || out.steps.is_empty()) && pin.is_empty()
-        && let Some((r1, r2, w, l)) = two_generations(kb, goal, inv, &need, &two, pin)
+    // Two generations (step 1's product as one of step 2's parents) compete on cost with the
+    // routes above, and stand in when nothing fits the cap. A plan of two new parents can cost
+    // far more than one where the second career only has to finish (play-throughs, 2026-10-28).
+    let current = if out.over_cap || out.steps.is_empty() { f64::INFINITY } else { out.steps.iter().map(Run::careers).sum() };
+    if pin.is_empty()
+        && let Some((r1, r2, w, l)) = two_generations(kb, goal, inv, &need, &two, pin, current)
     {
         out.over_cap = false;
         out.steps = vec![r1, r2];
@@ -358,8 +361,10 @@ pub const FROM_STEP: u64 = u64::MAX - 3000;
 /// Two generations: for the cheapest first steps (one per kind of product), add her product as
 /// a parent and plan a second step that runs with her, paired with a finished uma or with the
 /// first product itself. The cheapest under the cap, or None.
-fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], two: &ByJob, pin: &Pin) -> Option<(Run, Run, Option<u64>, Lineage)> {
-    let mut firsts: Vec<&Cand> = two.values().filter_map(|l| l.first()).filter(|c| c.careers() <= CAP).collect();
+/// The cheapest two-generation route under `bound` expected careers (a second step costs at
+/// least one career, so a first step past `bound - 1` can't win).
+fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], two: &ByJob, pin: &Pin, bound: f64) -> Option<(Run, Run, Option<u64>, Lineage)> {
+    let mut firsts: Vec<&Cand> = two.values().filter_map(|l| l.first()).filter(|c| c.careers() <= CAP && c.careers() + 1.0 < bound).collect();
     firsts.sort_by(|a, b| a.careers().total_cmp(&b.careers()));
     let mut best: Option<(f64, Run, Run, Option<u64>, Lineage)> = None;
     for c1 in firsts.into_iter().take(40) {
@@ -372,7 +377,7 @@ fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize,
         let mut second: Option<Cand> = None;
         for_each_cand(kb, goal, &inv2, need, Some(at), |c| {
             let total = c1.careers() + c.careers();
-            if c.careers() > CAP || chara(c.trainee) == chara(c1.trainee) || best.as_ref().is_some_and(|b| total >= b.0) || pin.avoids(&inv2, c) {
+            if c.careers() > CAP || total >= bound || chara(c.trainee) == chara(c1.trainee) || best.as_ref().is_some_and(|b| total >= b.0) || pin.avoids(&inv2, c) {
                 return;
             }
             // Her green only counts as the runner's own legacy, which the partner check covers.
@@ -696,7 +701,9 @@ mod tests {
         assert_eq!(p.impossible, vec![1]);
     }
 
-    /// Four Dirt stars for a C: no single career makes them, so two steps, harder first.
+    /// Four Late stars for a C: no single career makes them. Two generations win on cost: Haru
+    /// Urara makes Late 2★, then a career that only has to finish runs with her product as a
+    /// parent (the route the first plan used to skip unless nothing fitted the cap).
     #[test]
     fn two_steps_and_the_cap() {
         let kb = kb();
@@ -705,9 +712,10 @@ mod tests {
         let parents = vec![parent(&kb, 1, 100201, vec![], [(100101, vec![]), (104601, vec![])]), parent(&kb, 2, 104601, vec![], [(100101, vec![]), (100201, vec![])])];
         let p = propose(&kb, &goal, &inv(parents, vec![(105201, 3), (101901, 3)]));
         assert_eq!(p.steps.len(), 2, "{p:?}");
-        assert!(p.steps[0].careers() >= p.steps[1].careers());
-        let stars: u8 = p.steps.iter().flat_map(|s| &s.must).map(|w| if let Want::Pink { stars, .. } = w { *stars } else { 0 }).sum();
-        assert!(stars >= 4);
+        assert!(p.steps[1].legacies.contains(&FROM_STEP), "step 2 runs with step 1's product: {p:?}");
+        assert!(p.steps[1].must.is_empty() && p.steps[1].careers() == 1.0, "and only has to finish");
+        let total: f64 = p.steps.iter().map(Run::careers).sum();
+        assert!(total < 5.0, "{total}");
         assert!(p.after.as_ref().is_some_and(Lineage::meets));
         assert!(p.steps.iter().all(|s| s.careers() <= CAP) && !p.over_cap);
     }
