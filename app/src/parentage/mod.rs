@@ -11,6 +11,7 @@
 // Nothing outside the tests calls it until the Lineage page does: drop this then.
 #![allow(dead_code)]
 
+pub mod baseline;
 pub mod brief;
 pub mod jobs;
 pub mod outcome;

@@ -291,6 +291,10 @@ pub fn team(kb: &Knowledge, t: &super::team::CmTeam, inv: &Inventory) -> String 
         t.budget,
         t.needed
     );
+    if !t.today.is_empty() {
+        let today: Vec<String> = t.today.iter().map(|x| format!("#{} {} ({}{})", x.vet, uma_name(kb, x.outfit), x.style.label(), x.share.map_or(String::new(), |s| format!(", wins {:.0}%", s * 100.0)))).collect();
+        out += &format!("What you can field today (your finished umas as they are, best first): {}.\n", today.join(", "));
+    }
     for (i, r) in t.runners.iter().enumerate() {
         let lineage = if r.parents.now.as_ref().is_some_and(Lineage::meets) {
             "lineage ready ✔".to_string()
@@ -305,6 +309,9 @@ pub fn team(kb: &Knowledge, t: &super::team::CmTeam, inv: &Inventory) -> String 
         let mut sim = r.sim.map_or("not raced".to_string(), |(s, lo, hi)| format!("head to head against her two teammates she wins {:.0}% (95% {:.0}–{:.0}%, simulation)", s * 100.0, lo * 100.0, hi * 100.0));
         if let Some((surv, spurt)) = r.stamina {
             sim += &format!("; she survives {:.0}% of races and reaches full spurt in {:.0}%", surv * 100.0, spurt * 100.0);
+        }
+        if let (Some(v), Some(ace)) = (r.vs_today, t.today.first()) {
+            sim += &format!("; against today's best (#{} {}) she wins {:.0}% ({:+.0} points over even)", ace.vet, uma_name(kb, ace.outfit), v * 100.0, (v - 0.5) * 100.0);
         }
         out += &format!(
             "Runner {}: {} ({}){}: {lineage}. Deck: {}; borrow {friend}. Skills to buy: {}{}. {sim}.\n",
@@ -337,7 +344,10 @@ pub fn team(kb: &Knowledge, t: &super::team::CmTeam, inv: &Inventory) -> String 
 /// A Team Trials team: each race's runners with their estimated points, the Aces, the total,
 /// and the career that raises it most.
 pub fn tt(kb: &Knowledge, t: &super::tt::TtTeam) -> String {
-    let mut out = format!("Team Trials team, about {:.0} points a round of the five races (estimate).\n", t.total);
+    let mut out = format!("Team Trials team, about {:.0} points a round of the five races (estimate). Community meta read {}{}.\n", t.total, t.meta_read, if t.meta_age.1 { " (may be stale)" } else { "" });
+    if t.today_total > 0.0 {
+        out += &format!("What you can field today (your finished umas as they are) scores about {:.0}; raced together, the plan beats it by about {:+.0}.\n", t.today_total, t.gain);
+    }
     for r in &t.rows {
         out += &format!("{} ({} style{}):\n", r.name, r.styles, if r.styles == 1 { "" } else { "s" });
         for s in &r.slots {
@@ -366,6 +376,10 @@ pub fn tt(kb: &Knowledge, t: &super::tt::TtTeam) -> String {
             for n in &s.notes {
                 out += &format!("      {n}\n");
             }
+        }
+        if !r.today.is_empty() {
+            let today: Vec<String> = r.today.iter().map(|(x, pts)| format!("#{} {} ({}) ~{:.0}", x.vet, uma_name(kb, x.outfit), x.style.label(), pts)).collect();
+            out += &format!("  Today: {}{}.\n", today.join(", "), r.gain.map_or(String::new(), |g| format!("; the plan gains {g:+.0} here")));
         }
         for n in &r.notes {
             out += &format!("  ⚠ {n}\n");

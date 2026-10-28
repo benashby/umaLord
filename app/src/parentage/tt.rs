@@ -32,6 +32,7 @@ pub const ROWS: [(&str, Surface, Distance, u32); 5] = [
 #[serde(default)]
 pub struct TtMeta {
     pub read: String,
+    pub sources: Vec<MetaSource>,
     pub tracks: BTreeMap<String, serde_json::Value>,
     pub stamina: BTreeMap<String, serde_json::Value>,
     pub scenario: MetaScenario,
@@ -39,6 +40,17 @@ pub struct TtMeta {
     pub borrows: BTreeMap<String, serde_json::Value>,
     pub roles: MetaRoles,
 }
+
+#[derive(serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct MetaSource {
+    pub name: String,
+    pub url: String,
+    pub updated: String,
+}
+
+/// The meta is community opinion that moves with every release: older than this, say so.
+pub const STALE_DAYS: i64 = 45;
 
 #[derive(serde::Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -70,6 +82,12 @@ pub struct Role {
 }
 
 impl TtMeta {
+    /// Days since the meta was read, and whether that's past `STALE_DAYS`.
+    pub fn age(&self, today: &str) -> (i64, bool) {
+        let days = crate::tab_planner::days_apart(today, &self.read);
+        (days, days > STALE_DAYS)
+    }
+
     pub fn role(&self, uma: u32) -> Option<&Role> {
         self.roles.list.iter().find(|r| r.id == uma)
     }
@@ -105,6 +123,14 @@ pub(crate) fn parse_style(s: &str) -> Option<Style> {
         "End" => Style::End,
         _ => return None,
     })
+}
+
+/// The player's choices for a Team Trials team: an outfit pinned to a race, and characters left
+/// out. Re-planning keeps them.
+#[derive(Clone, Debug, Default)]
+pub struct TtPins {
+    pub pin: Vec<(u32, String)>,
+    pub exclude: Vec<u32>,
 }
 
 /// Positioning: 1,000 in each of the early, mid and late race per running style on the team.
@@ -153,6 +179,10 @@ pub struct Row {
     pub slots: Vec<Slot>,
     /// Styles on the team (each adds the positioning bonus).
     pub styles: usize,
+    /// What the player can field today here: finished umas as they are, with their points, and
+    /// the planned runners' gain over them, raced against each other on the same course.
+    pub today: Vec<(super::baseline::Today, f64)>,
+    pub gain: Option<f64>,
     pub notes: Vec<String>,
 }
 
@@ -160,6 +190,12 @@ pub struct Row {
 pub struct TtTeam {
     pub rows: Vec<Row>,
     pub total: f64,
+    /// Today's team's points and the plan's gain over it, summed over the races both ran.
+    pub today_total: f64,
+    pub gain: f64,
+    /// When the community meta was read, its days old, and whether it may be stale.
+    pub meta_read: String,
+    pub meta_age: (i64, bool),
     /// The career that raises the team most: the weakest slot's next step, in words.
     pub next: String,
     pub notes: Vec<String>,
@@ -182,6 +218,31 @@ fn skill_points(kb: &crate::knowledge::Knowledge, id: u32, own_unique: Option<u3
         Some(_) => 500.0,
         None => 0.0,
     }
+}
+
+/// Her skill points: each skill's points times the share of races it fired in. A unique the
+/// community finds unreliable fires far less in a full field than in head-to-head races: 40%.
+fn skills_score(kb: &crate::knowledge::Knowledge, meta: &TtMeta, outfit: u32, stars: u8, rates: &BTreeMap<u32, f64>) -> f64 {
+    let unique = kb.umas.get(&outfit).and_then(|i| i.unique_skill);
+    let shaky = meta.role(outfit).is_some_and(|r| r.unique.as_deref() == Some("inconsistent"));
+    rates.iter().map(|(id, rate)| skill_points(kb, *id, unique, stars) * rate * if shaky && Some(*id) == unique { 0.4 } else { 1.0 }).sum()
+}
+
+/// Placement between about 6th (4,000) and 1st (10,000) in a twelve-runner field, from her win
+/// share in head-to-head races: an estimate.
+fn placement(share: Option<f64>) -> f64 {
+    4000.0 + 6000.0 * share.unwrap_or(0.5)
+}
+
+/// A race's team points from each runner's placement plus skills and style: positioning for
+/// each style on the team, and the Ace (the top one) +10%.
+fn team_points(runners: &[(f64, Style)]) -> f64 {
+    let mut styles: Vec<Style> = runners.iter().map(|r| r.1).collect();
+    styles.sort_by_key(|s| *s as u8);
+    styles.dedup();
+    let top = runners.iter().map(|r| r.0).fold(f64::MIN, f64::max);
+    let base: f64 = runners.iter().map(|r| r.0 + POSITIONING * styles.len() as f64 / 3.0).sum();
+    if runners.is_empty() { 0.0 } else { base + 0.1 * (top + POSITIONING * styles.len() as f64 / 3.0) }
 }
 
 impl App {
@@ -251,17 +312,48 @@ impl App {
         fits.iter().find(|c| self.kb.umalator_presets.iter().any(|e| e.course == c.id)).or(fits.first()).map(|c| c.id)
     }
 
+    /// The pins that can hold: an owned outfit, a race that exists, a character not left out, and
+    /// one pin per character (the first). The others are dropped, each with why.
+    fn tt_valid_pins(&self, pins: &TtPins) -> (TtPins, Vec<String>) {
+        let mut out = TtPins { pin: Vec::new(), exclude: pins.exclude.clone() };
+        let mut dropped = Vec::new();
+        for (t, race) in &pins.pin {
+            let name = super::uma_name(&self.kb, *t);
+            let c = crate::affinity::chara(*t);
+            let why = if self.owned_uma(*t).is_none() {
+                Some("you don't own her")
+            } else if !ROWS.iter().any(|r| r.0 == race) {
+                Some("no such race")
+            } else if pins.exclude.contains(&c) {
+                Some("her character is left out")
+            } else if out.pin.iter().any(|(o, _)| crate::affinity::chara(*o) == c) {
+                Some("her character is already pinned: each character runs once")
+            } else {
+                None
+            };
+            match why {
+                Some(w) => dropped.push(format!("Your pin of {name} to {race} was dropped: {w}.")),
+                None => out.pin.push((*t, race.clone())),
+            }
+        }
+        (out, dropped)
+    }
+
     /// The Team Trials team. Builds and races up to six candidates per race, so it takes a few
     /// seconds.
-    pub(crate) fn tt_team(&mut self, races: usize) -> Result<TtTeam, String> {
+    pub(crate) fn tt_team(&mut self, races: usize, pins: &TtPins) -> Result<TtTeam, String> {
         let inv = self.parent_inventory();
+        let (pins, dropped) = self.tt_valid_pins(pins);
         let saved = std::mem::take(&mut self.planner.plan);
-        let out = self.tt_team_inner(&inv, races);
+        let mut out = self.tt_team_inner(&inv, races, &pins);
+        if let Ok(t) = &mut out {
+            t.notes.extend(dropped);
+        }
         self.planner.plan = saved;
         out
     }
 
-    fn tt_team_inner(&mut self, inv: &Inventory, races: usize) -> Result<TtTeam, String> {
+    fn tt_team_inner(&mut self, inv: &Inventory, races: usize, pins: &TtPins) -> Result<TtTeam, String> {
         let data = self.sim_data.clone().ok_or("The simulator's data isn't loaded.")?;
         let mut notes = Vec::new();
         let meta = self.tt_meta();
@@ -277,7 +369,9 @@ impl App {
                 .filter_map(|u| {
                     let a = &self.kb.umas.get(&u.id)?.aptitude;
                     let (gs, gd) = (grade_rank(a.surface(surface)), grade_rank(a.distance(distance)));
-                    if gs < 6 || gd < 6 {
+                    let pinned_here = pins.pin.iter().any(|(t, r)| *t == u.id && r == name);
+                    let pinned_elsewhere = pins.pin.iter().any(|(t, r)| crate::affinity::chara(*t) == crate::affinity::chara(u.id) && r != name);
+                    if pins.exclude.contains(&crate::affinity::chara(u.id)) || pinned_elsewhere || (!pinned_here && (gs < 6 || gd < 6)) {
                         return None;
                     }
                     let role = meta.role(u.id);
@@ -287,7 +381,9 @@ impl App {
                     Some((u.id, style, gs >= 7 && gd >= 7, (fit, steady, gs.min(7) + gd.min(7), u.stars, u.potential)))
                 })
                 .collect();
-            list.sort_by(|a, b| a.3.0.cmp(&b.3.0).then(b.3.1.cmp(&a.3.1)).then(b.2.cmp(&a.2)).then((b.3.2, b.3.3, b.3.4).cmp(&(a.3.2, a.3.3, a.3.4))));
+            // Pinned runners first, whatever the meta says.
+            let pinned = |id: u32| pins.pin.iter().any(|(t, r)| *t == id && r == name);
+            list.sort_by(|a, b| pinned(b.0).cmp(&pinned(a.0)).then(a.3.0.cmp(&b.3.0)).then(b.3.1.cmp(&a.3.1)).then(b.2.cmp(&a.2)).then((b.3.2, b.3.3, b.3.4).cmp(&(a.3.2, a.3.3, a.3.4))));
             cands.push(list.into_iter().take(6).map(|c| (c.0, c.1, c.2)).collect());
         }
         // Build and race each race's candidates head to head; score each.
@@ -326,36 +422,12 @@ impl App {
             let course = std::sync::Arc::new(course);
             let race = crate::sim::run::race_params(1, 1, 1, 2, None);
             let opts = crate::sim::run::SimOptions { samples: races, seed: 12345.0, ..Default::default() };
-            let n = slots.len();
-            let mut share = vec![Vec::new(); n];
-            let mut rates: Vec<BTreeMap<u32, Vec<f64>>> = vec![Default::default(); n];
-            for i in 0..n {
-                for j in i + 1..n {
-                    let (Some(a), Some(b)) = (&builds[i], &builds[j]) else { continue };
-                    let res = crate::sim::run::run_comparison(&data, &course, &race, a, b, &opts, true, false, None);
-                    let runs = res.gaps.len().max(1) as f64;
-                    let b_share = res.gaps.iter().filter(|g| **g > 0.0).count() as f64 / runs;
-                    share[i].push(1.0 - b_share);
-                    share[j].push(b_share);
-                    for (k, u) in [(i, &res.umas[0]), (j, &res.umas[1])] {
-                        for s in &u.skills {
-                            rates[k].entry(s.id).or_default().push(s.rate / 100.0);
-                        }
-                    }
-                }
-            }
-            for (k, s) in slots.iter_mut().enumerate() {
-                let w = if share[k].is_empty() { 0.5 } else { share[k].iter().sum::<f64>() / share[k].len() as f64 };
-                // Between about 6th (4,000) and 1st (10,000) in a twelve-runner field: an estimate.
-                s.placement = 4000.0 + 6000.0 * w;
-                let info = self.kb.umas.get(&s.trainee);
+            let raced = super::baseline::race_pool(&data, &course, &race, &builds, &opts);
+            for (s, (share, rates)) in slots.iter_mut().zip(&raced) {
+                s.placement = placement(*share);
                 let stars = self.roster.umas.iter().find(|u| u.id == s.trainee).map_or(3, |u| u.stars);
-                let unique = info.and_then(|i| i.unique_skill);
-                // A unique the community finds unreliable fires far less in a full field than in
-                // head-to-head races; count 40% of it.
-                let shaky = meta.role(s.trainee).is_some_and(|r| r.unique.as_deref() == Some("inconsistent"));
-                s.skills = rates[k].iter().map(|(id, v)| skill_points(&self.kb, *id, unique, stars) * v.iter().sum::<f64>() / v.len() as f64 * if shaky && Some(*id) == unique { 0.4 } else { 1.0 }).sum();
-                if shaky {
+                s.skills = skills_score(&self.kb, &meta, s.trainee, stars, rates);
+                if meta.role(s.trainee).is_some_and(|r| r.unique.as_deref() == Some("inconsistent")) {
                     s.notes.push("Her unique fires unreliably in Team Trials (community), so it's counted at 40%.".into());
                 }
             }
@@ -364,11 +436,16 @@ impl App {
         // Fill the races with the fewest candidates first; each character once in the team.
         let mut order: Vec<usize> = (0..ROWS.len()).collect();
         order.sort_by_key(|r| scored[*r].len());
+        // Pinned runners hold their characters from the start.
+        let held: Vec<u32> = pins.pin.iter().map(|(t, _)| crate::affinity::chara(*t)).collect();
         let mut used: Vec<u32> = Vec::new();
         let mut rows: Vec<Option<Row>> = vec![None; ROWS.len()];
         for r in order {
-            let mut pool: Vec<Slot> = scored[r].iter().filter(|s| !used.contains(&crate::affinity::chara(s.trainee))).cloned().collect();
-            let mut team: Vec<Slot> = Vec::new();
+            let mut team: Vec<Slot> = scored[r].iter().filter(|s| pins.pin.iter().any(|(t, x)| *t == s.trainee && x == ROWS[r].0)).take(3).cloned().collect();
+            for s in &mut team {
+                s.notes.insert(0, "Pinned by you.".into());
+            }
+            let mut pool: Vec<Slot> = scored[r].iter().filter(|s| !used.contains(&crate::affinity::chara(s.trainee)) && !held.contains(&crate::affinity::chara(s.trainee))).cloned().collect();
             // Greedy: each pick maximises her points plus the positioning bonus for a new style.
             while team.len() < 3 && !pool.is_empty() {
                 let gain = |s: &Slot, team: &[Slot]| s.placement + s.skills + if team.iter().any(|t| t.style == s.style) { 0.0 } else { POSITIONING };
@@ -396,7 +473,7 @@ impl App {
                 let base = s.placement + s.skills + POSITIONING * styles as f64 / 3.0;
                 s.total = if s.ace { base * 1.1 } else { base };
             }
-            rows[r] = Some(Row { name: ROWS[r].0, slots: team, styles, notes: rnotes });
+            rows[r] = Some(Row { name: ROWS[r].0, slots: team, styles, today: Vec::new(), gain: None, notes: rnotes });
         }
         let mut rows: Vec<Row> = rows.into_iter().flatten().collect();
         // Each runner's lineage: her race's surface and distance and her style at A, inheriting
@@ -435,6 +512,48 @@ impl App {
                 s.parents = p.unwrap_or(base);
             }
         }
+        // What the player can field today: per race, up to three finished umas as they are (each
+        // character once in the team), raced against the planned runners on the same course and
+        // scored the same way.
+        let vets = self.veterans();
+        let mut taken: Vec<u32> = Vec::new();
+        let (mut today_total, mut gain) = (0.0, 0.0);
+        let race = crate::sim::run::race_params(1, 1, 1, 2, None);
+        let opts = crate::sim::run::SimOptions { samples: races, seed: 12345.0, ..Default::default() };
+        for row in &mut rows {
+            let i = ROWS.iter().position(|r| r.0 == row.name).unwrap_or(0);
+            let (_, surface, distance, _) = ROWS[i];
+            let picks = super::baseline::candidates(&vets, surface, distance, &taken, 3);
+            taken.extend(picks.iter().map(|v| crate::affinity::chara(v.card_id)));
+            let Some(course) = self.tt_course(&meta, i).and_then(|c| data.courses.get(&c).cloned()) else { continue };
+            if picks.is_empty() {
+                continue;
+            }
+            let course = std::sync::Arc::new(course);
+            let mut builds: Vec<Option<crate::sim::run::UmaBuild>> = Vec::new();
+            for s in &row.slots {
+                self.planner.plan = s.plan.clone();
+                builds.push(self.plan_sim_build(true).ok());
+            }
+            let vb: Vec<(Option<crate::sim::run::UmaBuild>, Style)> = picks.iter().map(|v| super::baseline::build(&data, v, surface, distance).map_or((None, super::baseline::best_style(v)), |(b, st)| (Some(b), st))).collect();
+            builds.extend(vb.iter().map(|x| x.0.clone()));
+            let raced = super::baseline::race_pool(&data, &course, &race, &builds, &opts);
+            let n = row.slots.len();
+            let planned: Vec<(f64, Style)> = row.slots.iter().zip(&raced).map(|(s, (share, rates))| {
+                let stars = self.roster.umas.iter().find(|u| u.id == s.trainee).map_or(3, |u| u.stars);
+                (placement(*share) + skills_score(&self.kb, &meta, s.trainee, stars, rates), s.style)
+            }).collect();
+            row.today = picks.iter().zip(&vb).zip(&raced[n..]).map(|((v, (_, st)), (share, rates))| {
+                let pts = placement(*share) + skills_score(&self.kb, &meta, v.card_id, v.rarity, rates);
+                (super::baseline::Today { vet: v.trained_chara_id, outfit: v.card_id, style: *st, share: *share }, pts)
+            }).collect();
+            row.today.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let today_pts = team_points(&row.today.iter().map(|t| (t.1, t.0.style)).collect::<Vec<_>>());
+            let g = team_points(&planned) - today_pts;
+            row.gain = Some(g);
+            today_total += today_pts;
+            gain += g;
+        }
         let total: f64 = rows.iter().flat_map(|r| r.slots.iter().map(|s| s.total)).sum();
         // The career that raises the team most: fill an empty slot, else lift the weakest one.
         let next = if let Some(row) = rows.iter().find(|r| r.slots.len() < 3) {
@@ -459,13 +578,39 @@ impl App {
             "Nothing to train.".into()
         };
         notes.push("Scores are estimates: placement from head-to-head races in the simulator (the real races have twelve runners), skills from how often each fired.".into());
-        Ok(TtTeam { rows, total, next, notes })
+        let meta_age = meta.age(&crate::ui_util::today());
+        if meta_age.1 {
+            notes.push(format!("The community meta was read {} days ago ({}): it may be stale. knowledge/UPDATING.md says how to refresh it.", meta_age.0, meta.read));
+        }
+        Ok(TtTeam { rows, total, today_total, gain, meta_read: meta.read.clone(), meta_age, next, notes })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pins_hold_one_per_character() {
+        let a = App::for_tests();
+        let t = a.roster.umas[0].id;
+        let other = a.roster.umas.iter().map(|u| u.id).find(|id| crate::affinity::chara(*id) != crate::affinity::chara(t)).unwrap();
+        let pins = TtPins { pin: vec![(t, "Mile".into()), (t, "Sprint".into()), (other, "Dirt".into()), (1, "Long".into()), (t, "Moon".into())], exclude: vec![crate::affinity::chara(other)] };
+        let (kept, dropped) = a.tt_valid_pins(&pins);
+        assert_eq!(kept.pin, vec![(t, "Mile".to_string())]);
+        assert_eq!(dropped.len(), 4, "{dropped:?}");
+        assert!(dropped.iter().any(|d| d.contains("already pinned")) && dropped.iter().any(|d| d.contains("left out")) && dropped.iter().any(|d| d.contains("don't own")));
+    }
+
+    #[test]
+    fn meta_turns_stale_after_45_days() {
+        let m = TtMeta { read: "2026-09-01".into(), ..Default::default() };
+        assert_eq!(m.age("2026-10-16"), (45, false));
+        assert_eq!(m.age("2026-10-28"), (57, true));
+        let a = App::for_tests();
+        let shipped = a.tt_meta();
+        assert!(!shipped.read.is_empty() && !shipped.sources.is_empty(), "the meta file says when and where it was read");
+    }
 
     /// The Team Trials team on the real account:
     /// `UMALORD_ROOT=<data folder with knowledge/> cargo test --release tt_team_real_account -- --ignored --nocapture`.
@@ -475,12 +620,23 @@ mod tests {
         let root = std::path::PathBuf::from(std::env::var("UMALORD_ROOT").expect("UMALORD_ROOT"));
         let mut a = App::new(Some(root));
         let t = std::time::Instant::now();
-        let team = a.tt_team(200).unwrap();
+        let team = a.tt_team(200, &TtPins::default()).unwrap();
         eprintln!("({:.1} s)\n{}", t.elapsed().as_secs_f64(), super::super::text::tt(&a.kb, &team));
         let inv = a.parent_inventory();
         let next = a.tt_next(&team, &inv).expect("a next career");
         eprintln!("{}", super::super::brief::text(&a.kb, &next));
         assert!(next.friend.is_some(), "the next career borrows a friend card");
+        // Leave the first race's Ace out and pin the last race's weakest runner into the first race.
+        if let (Some(first), Some(last)) = (team.rows.first(), team.rows.last()) {
+            if let (Some(ace), Some(weak)) = (first.slots.first(), last.slots.last()) {
+                let pins = TtPins { pin: vec![(weak.trainee, first.name.to_string())], exclude: vec![crate::affinity::chara(ace.trainee)] };
+                let again = a.tt_team(200, &pins).unwrap();
+                let row = again.rows.iter().find(|r| r.name == first.name).unwrap();
+                assert!(row.slots.iter().any(|s| s.trainee == weak.trainee), "the pinned runner is in her race");
+                assert!(again.rows.iter().flat_map(|r| &r.slots).all(|s| crate::affinity::chara(s.trainee) != crate::affinity::chara(ace.trainee)), "the excluded character is out");
+                assert_eq!(again.rows.iter().flat_map(|r| &r.slots).filter(|s| crate::affinity::chara(s.trainee) == crate::affinity::chara(weak.trainee)).count(), 1, "pinned once");
+            }
+        }
         let mut charas = std::collections::BTreeSet::new();
         for r in &team.rows {
             assert!(r.slots.len() <= 3);

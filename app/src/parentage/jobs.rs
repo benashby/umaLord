@@ -48,13 +48,23 @@ impl Want {
     }
 
     /// Whether a finished uma's own sparks have it.
-    pub fn met(&self, own: &[u32]) -> bool {
-        let (key, stars) = match self {
+    fn key(&self) -> (u32, u8) {
+        match self {
             Want::Pink { aptitude, stars } => (pink_spark(*aptitude, 0) / 100, *stars),
             Want::Blue { stat, stars } => (*stat as u32 + 1, *stars),
             Want::Green { uma, stars } => (*uma, *stars),
-        };
-        own.iter().any(|id| id / 100 == key && (id % 100) as u8 >= stars)
+        }
+    }
+
+    pub fn met(&self, own: &[u32]) -> bool {
+        self.short(own) == 0
+    }
+
+    /// Stars missing: 0 when met, the full count when the spark isn't there at all.
+    pub fn short(&self, own: &[u32]) -> u8 {
+        let (key, stars) = self.key();
+        let best = own.iter().filter(|id| *id / 100 == key).map(|id| (id % 100) as u8).max().unwrap_or(0);
+        stars.saturating_sub(best)
     }
 }
 
@@ -96,11 +106,38 @@ pub struct Pin {
     pub trainee: Option<u32>,
     pub legacy: Option<u64>,
     pub partner: Option<u64>,
+    /// Steps the player gave up on: routes steer around them.
+    pub avoid: Vec<Avoid>,
 }
 
 impl Pin {
+    /// Whether nothing is pinned (steps to avoid don't count: they only narrow the search).
     pub fn is_empty(&self) -> bool {
-        *self == Pin::default()
+        self.trainee.is_none() && self.legacy.is_none() && self.partner.is_none()
+    }
+
+    fn avoids(&self, inv: &Inventory, c: &Cand) -> bool {
+        // A starter step's legacies are any two (no index): its ids are 0, as its Run records.
+        let ids = c.legacies.map(|i| inv.parents.get(i).map_or(0, |p| p.id));
+        self.avoid.iter().any(|a| a.matches(c.trainee, ids))
+    }
+}
+
+/// A step to steer around: this trainee with these two legacies (in either order).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Avoid {
+    pub trainee: u32,
+    pub legacies: [u64; 2],
+}
+
+impl Avoid {
+    pub fn of(run: &Run) -> Self {
+        Avoid { trainee: run.trainee, legacies: run.legacies }
+    }
+
+    fn matches(&self, trainee: u32, ids: [u64; 2]) -> bool {
+        self.trainee == trainee && (self.legacies == ids || self.legacies == [ids[1], ids[0]])
     }
 }
 
@@ -186,6 +223,9 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
     // The best careers per (pink, stars brought, green): candidates for two-step routes.
     let mut two: ByJob = BTreeMap::new();
     for_each_cand(kb, goal, inv, &need, None, |c| {
+        if pin.avoids(inv, c) {
+            return;
+        }
         let green_needed = goal.green.is_some() && !c.green;
         let req: Vec<u32> = need.iter().zip(&c.brings).map(|((_, n), b)| n.saturating_sub(*b)).collect();
         let ok = pinned(c);
@@ -253,7 +293,7 @@ pub fn propose_pinned(kb: &Knowledge, goal: &Goal, inv: &Inventory, pin: &Pin) -
     }
     // Nothing under the cap: try two generations, step 1's product as one of step 2's parents.
     if (out.over_cap || out.steps.is_empty()) && pin.is_empty()
-        && let Some((r1, r2, w, l)) = two_generations(kb, goal, inv, &need, &two)
+        && let Some((r1, r2, w, l)) = two_generations(kb, goal, inv, &need, &two, pin)
     {
         out.over_cap = false;
         out.steps = vec![r1, r2];
@@ -318,7 +358,7 @@ pub const FROM_STEP: u64 = u64::MAX - 3000;
 /// Two generations: for the cheapest first steps (one per kind of product), add her product as
 /// a parent and plan a second step that runs with her, paired with a finished uma or with the
 /// first product itself. The cheapest under the cap, or None.
-fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], two: &ByJob) -> Option<(Run, Run, Option<u64>, Lineage)> {
+fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u32)], two: &ByJob, pin: &Pin) -> Option<(Run, Run, Option<u64>, Lineage)> {
     let mut firsts: Vec<&Cand> = two.values().filter_map(|l| l.first()).filter(|c| c.careers() <= CAP).collect();
     firsts.sort_by(|a, b| a.careers().total_cmp(&b.careers()));
     let mut best: Option<(f64, Run, Run, Option<u64>, Lineage)> = None;
@@ -332,7 +372,7 @@ fn two_generations(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize,
         let mut second: Option<Cand> = None;
         for_each_cand(kb, goal, &inv2, need, Some(at), |c| {
             let total = c1.careers() + c.careers();
-            if c.careers() > CAP || chara(c.trainee) == chara(c1.trainee) || best.as_ref().is_some_and(|b| total >= b.0) {
+            if c.careers() > CAP || chara(c.trainee) == chara(c1.trainee) || best.as_ref().is_some_and(|b| total >= b.0) || pin.avoids(&inv2, c) {
                 return;
             }
             // Her green only counts as the runner's own legacy, which the partner check covers.

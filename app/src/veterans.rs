@@ -45,6 +45,28 @@ pub struct Veteran {
     pub factor_id_array: Vec<u32>,
     pub win_saddle_id_array: Vec<u32>,
     pub succession_chara_array: Vec<Ancestor>,
+    /// Skills learned, the unique with its level.
+    pub skill_array: Vec<SkillRef>,
+    /// Running style it raced with: 1 Front, 2 Pace, 3 Late, 4 End.
+    pub running_style: u8,
+    /// Aptitudes after inheritance, 1 = G … 8 = S.
+    pub proper_ground_turf: u8,
+    pub proper_ground_dirt: u8,
+    pub proper_distance_short: u8,
+    pub proper_distance_mile: u8,
+    pub proper_distance_middle: u8,
+    pub proper_distance_long: u8,
+    pub proper_running_style_nige: u8,
+    pub proper_running_style_senko: u8,
+    pub proper_running_style_sashi: u8,
+    pub proper_running_style_oikomi: u8,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct SkillRef {
+    pub skill_id: u32,
+    pub level: u32,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]

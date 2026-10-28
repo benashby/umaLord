@@ -31,6 +31,9 @@ pub struct Runner {
     pub stamina: Option<(f64, f64)>,
     /// Each skill's share of races it fired in.
     pub skill_rates: Vec<(u32, f64)>,
+    /// Her win share head to head against today's ace (`CmTeam::today`): above one half, the
+    /// plan beats what's already there.
+    pub vs_today: Option<f64>,
     pub notes: Vec<String>,
 }
 
@@ -39,6 +42,9 @@ pub struct Runner {
 pub struct CmTeam {
     pub event: EventPreset,
     pub runners: Vec<Runner>,
+    /// What the player can field today: the best of their finished umas as they are, strongest
+    /// first (the ace).
+    pub today: Vec<super::baseline::Today>,
     /// Every parent step of the three, harder first: (runner index, step).
     pub queue: Vec<(usize, Run)>,
     /// Parent careers there's time for before the runners must start, and the careers the queue
@@ -57,11 +63,14 @@ pub struct TeamOpts {
     pub held_back: f64,
     pub races: usize,
     pub seed: u64,
+    /// The player's choices: outfits that must run, and characters left out. Re-planning keeps them.
+    pub pin: Vec<u32>,
+    pub exclude: Vec<u32>,
 }
 
 impl Default for TeamOpts {
     fn default() -> Self {
-        TeamOpts { careers_per_day: 4.8, held_back: 2.0, races: 300, seed: 12345 }
+        TeamOpts { careers_per_day: 4.8, held_back: 2.0, races: 300, seed: 12345, pin: Vec::new(), exclude: Vec::new() }
     }
 }
 
@@ -129,6 +138,26 @@ impl App {
         })
     }
 
+    /// One runner for the team: her lineage plan for the CM's course and this style, with the
+    /// sheet's inherited unique when a route reaches it; and whether her lineage is reachable.
+    fn cm_runner(&self, preset: &EventPreset, style: Style, t: u32, inv: &Inventory, meta: &[u32]) -> (Runner, bool) {
+        let surface = if self.planner.plan.surface == crate::knowledge::Surface::Dirt { 1 } else { 0 };
+        let distance = 2 + crate::knowledge::Distance::ALL.iter().position(|d| *d == self.planner.plan.distance).unwrap_or(2);
+        let mut goal = Goal { runner: t, targets: vec![surface, distance, style_index(style)], label: format!("CM {} ({}), {}", preset.id, preset.name, style.label()), ..Default::default() };
+        let mut rnotes = Vec::new();
+        let green = self.meta_green(preset, style, t);
+        goal.green = green;
+        let mut p = super::jobs::propose(&self.kb, &goal, inv);
+        if green.is_some() && (!p.impossible.is_empty() || (p.steps.is_empty() && !p.now.as_ref().is_some_and(super::score::Lineage::meets)) || p.over_cap) {
+            rnotes.push(format!("The sheet's inherited unique ({}) is out of reach here, so her lineage is planned without it.", green.map(|u| super::uma_name(&self.kb, u)).unwrap_or_default()));
+            goal.green = None;
+            p = super::jobs::propose(&self.kb, &goal, inv);
+        }
+        let ready = p.now.as_ref().is_some_and(super::score::Lineage::meets);
+        let reachable = ready || (!p.steps.is_empty() && !p.over_cap);
+        (Runner { trainee: t, style, meta_pick: meta.contains(&t), goal, parents: p, plan: Plan::default(), sim: None, stamina: None, skill_rates: Vec::new(), vs_today: None, notes: rnotes }, reachable)
+    }
+
     /// The team for a Champions Meeting. Runs the simulator, so it takes a few seconds.
     pub(crate) fn cm_team(&mut self, preset: &EventPreset, opts: &TeamOpts) -> Result<CmTeam, String> {
         let inv = self.parent_inventory();
@@ -145,34 +174,36 @@ impl App {
     fn cm_team_inner(&mut self, preset: &EventPreset, opts: &TeamOpts, inv: &Inventory) -> Result<CmTeam, String> {
         let mut notes = Vec::new();
         let mut runners: Vec<Runner> = Vec::new();
+        let mut today_team = Vec::new();
         let styles = ranked_styles(self, preset);
-        // One runner per style the sheet ranks best, then fill from the top style again.
-        let order: Vec<Style> = styles.iter().copied().take(3).chain(styles.iter().copied()).collect();
+        let out = |t: u32, runners: &[Runner]| opts.exclude.contains(&crate::affinity::chara(t)) || runners.iter().any(|r| crate::affinity::chara(r.trainee) == crate::affinity::chara(t));
+        // The player's pinned runners first, each in the sheet's best-ranked style she has B or
+        // better in.
+        for &t in &opts.pin {
+            if runners.len() == 3 || out(t, &runners) || self.owned_uma(t).is_none() {
+                continue;
+            }
+            let Some(info) = self.kb.umas.get(&t) else { continue };
+            let style = styles.iter().copied().find(|s| crate::knowledge::grade_rank(info.aptitude.style(*s)) >= 6).unwrap_or_else(|| info.aptitude.best_style());
+            self.planner.plan = self.cm_plan(preset, style, None);
+            let meta: Vec<u32> = self.plan_meta_trainees();
+            let (mut r, _) = self.cm_runner(preset, style, t, inv, &meta);
+            r.notes.insert(0, "Pinned by you.".into());
+            runners.push(r);
+        }
+        // One runner per style the sheet ranks best (a pinned runner's style counts), then fill
+        // from the top style again.
+        let order: Vec<Style> = styles.iter().copied().take(3).filter(|s| !runners.iter().any(|r| r.style == *s)).chain(styles.iter().copied()).collect();
         for style in order {
             if runners.len() == 3 {
                 break;
             }
             self.planner.plan = self.cm_plan(preset, style, None);
             let meta: Vec<u32> = self.plan_meta_trainees();
-            let taken: Vec<u32> = runners.iter().map(|r| crate::affinity::chara(r.trainee)).collect();
-            let candidates: Vec<u32> = self.trainee_candidates().into_iter().filter(|t| !taken.contains(&crate::affinity::chara(*t))).take(4).collect();
-            let surface = if self.planner.plan.surface == crate::knowledge::Surface::Dirt { 1 } else { 0 };
-            let distance = 2 + crate::knowledge::Distance::ALL.iter().position(|d| *d == self.planner.plan.distance).unwrap_or(2);
+            let candidates: Vec<u32> = self.trainee_candidates().into_iter().filter(|t| !out(*t, &runners)).take(4).collect();
             let mut picked: Option<Runner> = None;
             for t in candidates {
-                let mut goal = Goal { runner: t, targets: vec![surface, distance, style_index(style)], label: format!("CM {} ({}), {}", preset.id, preset.name, style.label()), ..Default::default() };
-                let mut rnotes = Vec::new();
-                let green = self.meta_green(preset, style, t);
-                goal.green = green;
-                let mut p = super::jobs::propose(&self.kb, &goal, inv);
-                if green.is_some() && (!p.impossible.is_empty() || (p.steps.is_empty() && !p.now.as_ref().is_some_and(super::score::Lineage::meets)) || p.over_cap) {
-                    rnotes.push(format!("The sheet's inherited unique ({}) is out of reach here, so her lineage is planned without it.", green.map(|u| super::uma_name(&self.kb, u)).unwrap_or_default()));
-                    goal.green = None;
-                    p = super::jobs::propose(&self.kb, &goal, inv);
-                }
-                let ready = p.now.as_ref().is_some_and(super::score::Lineage::meets);
-                let reachable = ready || (!p.steps.is_empty() && !p.over_cap);
-                let r = Runner { trainee: t, style, meta_pick: meta.contains(&t), goal, parents: p, plan: Plan::default(), sim: None, stamina: None, skill_rates: Vec::new(), notes: rnotes };
+                let (r, reachable) = self.cm_runner(preset, style, t, inv, &meta);
                 if reachable {
                     picked = Some(r);
                     break;
@@ -252,6 +283,44 @@ impl App {
                     let half = 1.96 * (share * (1.0 - share) / runs).sqrt();
                     r.sim = Some((share, (share - half).max(0.0), (share + half).min(1.0)));
                 }
+                // What the player can field today: their finished umas as they are, raced against
+                // each other, then each planned runner against today's best.
+                let vets = self.veterans();
+                let (surface, distance) = (runners[0].plan.surface, runners[0].plan.distance);
+                let picks = super::baseline::candidates(&vets, surface, distance, &[], 4);
+                let vbuilds: Vec<(Option<crate::sim::run::UmaBuild>, Style)> = picks
+                    .iter()
+                    .map(|v| match super::baseline::build(&data, v, surface, distance) {
+                        Some((mut b, s)) => {
+                            b.skills.retain(|x| !preset.disabled_skills.contains(x));
+                            (Some(b), s)
+                        }
+                        None => (None, super::baseline::best_style(v)),
+                    })
+                    .collect();
+                let only: Vec<Option<crate::sim::run::UmaBuild>> = vbuilds.iter().map(|x| x.0.clone()).collect();
+                let raced = super::baseline::race_pool(&data, &course, &race, &only, &sim_opts);
+                let mut today: Vec<(super::baseline::Today, Option<crate::sim::run::UmaBuild>)> = picks
+                    .iter()
+                    .zip(vbuilds)
+                    .zip(raced)
+                    .map(|((v, (b, style)), (share, _))| (super::baseline::Today { vet: v.trained_chara_id, outfit: v.card_id, style, share }, b))
+                    .collect();
+                today.sort_by(|a, b| b.0.share.unwrap_or(1.0).total_cmp(&a.0.share.unwrap_or(1.0)));
+                today.truncate(3);
+                if let Some(ace) = today.first().and_then(|t| t.1.clone()) {
+                    for (r, b) in runners.iter_mut().zip(&builds) {
+                        if let Some(b) = b {
+                            let res = crate::sim::run::run_comparison(&data, &course, &race, b, &ace, &sim_opts, true, false, None);
+                            let runs = res.gaps.len().max(1) as f64;
+                            r.vs_today = Some(1.0 - res.gaps.iter().filter(|g| **g > 0.0).count() as f64 / runs);
+                        }
+                    }
+                }
+                if today.is_empty() {
+                    notes.push("None of your finished umas can run this course (B or better in its surface and distance), so there's no team today to compare with.".into());
+                }
+                today_team = today.into_iter().map(|t| t.0).collect();
             } else {
                 notes.push("The simulator has no course for this CM yet, so the runners weren't raced.".into());
             }
@@ -277,7 +346,7 @@ impl App {
         } else if needed > budget {
             notes.push(format!("The parent careers ({needed:.0} expected) are more than there's time for ({budget:.0}). Drop the runner with the longest queue, or borrow a friend's legacy for her."));
         }
-        Ok(CmTeam { event: preset.clone(), runners, queue, budget, needed, days_left, notes })
+        Ok(CmTeam { event: preset.clone(), runners, today: today_team, queue, budget, needed, days_left, notes })
     }
 }
 
@@ -308,6 +377,16 @@ mod tests {
                     for r in &team.runners {
                         assert!(r.plan.friend.is_some() && r.plan.friend_lb == 4, "a borrowed MLB friend card");
                         assert!(a.roster.umas.iter().any(|u| u.id == r.trainee), "an owned runner");
+                    }
+                    // Leave the ace out and pin an owned uma who wasn't picked: both hold.
+                    let out = crate::affinity::chara(team.runners[0].trainee);
+                    let on: Vec<u32> = team.runners.iter().map(|r| crate::affinity::chara(r.trainee)).collect();
+                    if let Some(pin) = a.roster.umas.iter().map(|u| u.id).find(|t| !on.contains(&crate::affinity::chara(*t))) {
+                        let opts = TeamOpts { pin: vec![pin], exclude: vec![out], ..TeamOpts::default() };
+                        let again = a.cm_team(&cm, &opts).expect("a team with the player's choices");
+                        assert!(again.runners.iter().any(|r| r.trainee == pin), "the pinned uma runs");
+                        assert!(again.runners.iter().all(|r| crate::affinity::chara(r.trainee) != out), "the excluded character doesn't");
+                        eprintln!("pinned {}, left out {}: {}", super::super::uma_name(&a.kb, pin), super::super::uma_name(&a.kb, team.runners[0].trainee), again.runners.iter().map(|r| super::super::uma_name(&a.kb, r.trainee)).collect::<Vec<_>>().join(", "));
                     }
                 }
                 Err(e) => eprintln!("==== {}: {e}", cm.name),

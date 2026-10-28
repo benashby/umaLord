@@ -89,6 +89,8 @@ pub struct Hit {
     pub nice: Vec<usize>,
     /// Whether it ran with the step's legacies.
     pub same_parents: bool,
+    /// Must-have stars it's missing, all must-haves together.
+    pub short: u32,
 }
 
 impl ParentPlan {
@@ -193,6 +195,13 @@ impl ParentPlan {
                 if self.partner == Some(virt) {
                     self.partner = Some(id);
                 }
+                for a in &mut self.pin.avoid {
+                    for l in &mut a.legacies {
+                        if *l == virt {
+                            *l = id;
+                        }
+                    }
+                }
                 if self.pin.legacy == Some(virt) {
                     self.pin.legacy = Some(id);
                 }
@@ -238,9 +247,43 @@ impl ParentPlan {
     /// and plan the rest around it.
     pub fn set_pin(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], pin: Pin, today: &str) -> String {
         self.snapshot();
-        self.pin = pin;
+        let avoid = std::mem::take(&mut self.pin.avoid);
+        self.pin = if pin.avoid.is_empty() { Pin { avoid, ..pin } } else { pin };
         self.log.push(format!("{today}: {}.", if self.pin.is_empty() { "cleared the pinned choice" } else { "pinned a choice for the next step" }));
         self.revalidate(kb, inv, vets, today)
+    }
+
+    /// Give up on the current step (no career comes close) and plan the rest around it: the
+    /// finished steps stay, and the routes left steer around this trainee with these legacies.
+    /// When no other route reaches the goal the plan stays as it was and the answer says what's
+    /// left: keep going, settle for the closest uma, or borrow a friend's legacy.
+    pub fn another_route(&mut self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], today: &str) -> Result<String, String> {
+        if let Some(why) = &self.blocked {
+            return Err(format!("The plan is waiting for your choice ({why}): pick another runner or goal, add a friend's legacy, or accept the cheapest route past the cap."));
+        }
+        let i = self.current().ok_or("Every step is done.")?;
+        let run = self.steps[i].run.clone();
+        let mut trial = self.clone();
+        trial.snapshot();
+        trial.pin.avoid.push(super::jobs::Avoid::of(&run));
+        // Pins on the step given up on would bring it straight back.
+        if trial.pin.trainee == Some(run.trainee) {
+            trial.pin.trainee = None;
+        }
+        if trial.pin.legacy.is_some_and(|l| run.legacies.contains(&l)) {
+            trial.pin.legacy = None;
+        }
+        let msg = trial.revalidate(kb, inv, vets, today);
+        if trial.blocked.is_some() {
+            return Err(format!(
+                "No other route reaches the goal without step {} ({}'s career): keep going, settle for her closest uma, or add a friend's legacy to borrow.",
+                i + 1,
+                super::uma_name(kb, run.trainee)
+            ));
+        }
+        trial.log.push(format!("{today}: gave up on step {} ({}'s career) for another route.", i + 1, super::uma_name(kb, run.trainee)));
+        *self = trial;
+        Ok(format!("Step {} set aside. {msg}", i + 1))
     }
 
     /// Add a friend's legacy the plan may use, and plan again with it.
@@ -256,6 +299,27 @@ impl ParentPlan {
         self.steps.iter().filter(|s| !s.finished()).map(|s| s.run.clone()).collect()
     }
 
+    /// The current step's finished umas, closest to its must-haves first: the ones to settle with.
+    pub fn closest(&self, vets: &[Veteran]) -> Vec<Hit> {
+        let mut out = self.hits(vets);
+        out.sort_by_key(|h| (!h.must, h.short, !h.same_parents, std::cmp::Reverse(h.nice.len())));
+        out
+    }
+
+    /// What settling with `id` would do, without doing it: the steps left after, and the message.
+    pub fn preview_settle(&self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], id: u64, today: &str) -> Result<(Vec<Run>, String), String> {
+        let mut trial = self.clone();
+        let msg = trial.settle(kb, inv, vets, id, today)?;
+        Ok((trial.remaining(), msg))
+    }
+
+    /// What another route would be, without taking it: the steps left after, and the message.
+    pub fn preview_another_route(&self, kb: &Knowledge, inv: &Inventory, vets: &[Veteran], today: &str) -> Result<(Vec<Run>, String), String> {
+        let mut trial = self.clone();
+        let msg = trial.another_route(kb, inv, vets, today)?;
+        Ok((trial.remaining(), msg))
+    }
+
     /// The current step's finished umas, newest first.
     pub fn hits(&self, vets: &[Veteran]) -> Vec<Hit> {
         let Some(step) = self.current().map(|i| &self.steps[i]) else { return Vec::new() };
@@ -266,7 +330,13 @@ impl ParentPlan {
                 let own = v.factors();
                 let same = same_parents(step, v, vets);
                 // The route counts the step's legacies' own pinks too, so other legacies don't meet it.
-                let hit = Hit { id: v.trained_chara_id, must: same && step.run.must.iter().all(|w| w.met(&own)), nice: step.run.nice.iter().enumerate().filter(|(_, w)| w.met(&own)).map(|(i, _)| i).collect(), same_parents: same };
+                let hit = Hit {
+                    id: v.trained_chara_id,
+                    must: same && step.run.must.iter().all(|w| w.met(&own)),
+                    nice: step.run.nice.iter().enumerate().filter(|(_, w)| w.met(&own)).map(|(i, _)| i).collect(),
+                    same_parents: same,
+                    short: step.run.must.iter().map(|w| u32::from(w.short(&own))).sum(),
+                };
                 (created(v), hit)
             })
             .collect();
@@ -490,7 +560,7 @@ mod tests {
         vets.push(vet(3, 105201, "2026-09-01 10:00:00", &[spark(&kb, "pink", "Dirt", 3)], &[]));
         vets.push(vet(4, 105201, "2026-10-20 10:00:00", &[spark(&kb, "pink", "Dirt", 2)], &[(10, 106801), (20, 100201)]));
         let hits = plan.hits(&vets);
-        assert_eq!(hits, vec![Hit { id: 4, must: true, nice: vec![0], same_parents: true }]);
+        assert_eq!(hits, vec![Hit { id: 4, must: true, nice: vec![0], same_parents: true, short: 0 }]);
         assert!(super::super::text::import_note(&kb, &plan, &vets).is_some_and(|n| n.contains("#4")));
         let inv = Inventory::new(&kb, &vets, vec![(105201, 3)]);
         let msg = plan.settle(&kb, &inv, &vets, 4, "2026-10-21").unwrap();
@@ -503,6 +573,18 @@ mod tests {
     fn settling_short_replans() {
         let (kb, _, mut vets, mut plan) = start();
         vets.push(vet(4, 105201, "2026-10-20 10:00:00", &[spark(&kb, "pink", "Sprint", 2)], &[(10, 106801), (20, 100201)]));
+        // One that meets the step, made before #4, and a newer one with other legacies: the one that
+        // meets it comes first, whatever its age.
+        vets.push(vet(6, 105201, "2026-10-19 10:00:00", &[spark(&kb, "pink", "Dirt", 1)], &[(10, 106801), (20, 100201)]));
+        vets.push(vet(7, 105201, "2026-10-21 10:00:00", &[], &[(10, 100101), (20, 100201)]));
+        let closest: Vec<u64> = plan.closest(&vets).iter().map(|h| h.id).collect();
+        assert_eq!(closest[0], 6, "{closest:?}");
+        vets.retain(|v| v.trained_chara_id != 6 && v.trained_chara_id != 7);
+        let inv = Inventory::new(&kb, &vets, vec![(105201, 3)]);
+        let before = plan.clone();
+        let (after, msg) = plan.preview_settle(&kb, &inv, &vets, 4, "2026-10-21").unwrap();
+        assert!(msg.contains("settled") && !after.is_empty(), "{msg}");
+        assert_eq!(plan, before, "a preview changes nothing");
         assert!(!plan.hits(&vets)[0].must);
         assert!(plan.settle(&kb, &Inventory::new(&kb, &vets, vec![]), &vets, 1, "x").is_err(), "#1 isn't a Haru Urara");
         let inv = Inventory::new(&kb, &vets, vec![(105201, 3)]);
@@ -587,6 +669,34 @@ mod tests {
         assert_eq!(past.len(), 1);
         assert!(past[0].log.last().is_some_and(|l| l.contains("cancelled")) && past[0].before.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stuck_steps_give_way_to_another_route() {
+        let (kb, _, vets, mut plan) = start();
+        // Only Haru Urara can run for the Dirt star: no other route, and the plan stays.
+        let inv = Inventory::new(&kb, &vets, vec![(105201, 3)]);
+        let before = plan.clone();
+        let err = plan.another_route(&kb, &inv, &vets, "d1").unwrap_err();
+        assert!(err.contains("No other route") && err.contains("settle"), "{err}");
+        assert_eq!(plan, before);
+        // With Agnes Digital owned too, the stuck Haru Urara step gives way to hers; the preview
+        // shows it first and changes nothing.
+        let inv = Inventory::new(&kb, &vets, vec![(105201, 3), (101901, 3)]);
+        let (after, _) = plan.preview_another_route(&kb, &inv, &vets, "d2").unwrap();
+        assert_eq!(after[0].trainee, 101901);
+        assert_eq!(plan, before, "a preview changes nothing");
+        let msg = plan.another_route(&kb, &inv, &vets, "d2").unwrap();
+        assert!(msg.contains("Step 1 set aside"), "{msg}");
+        assert_eq!(plan.steps[0].run.trainee, 101901, "{msg}");
+        assert_eq!(plan.pin.avoid.len(), 1);
+        // A later pin keeps the step set aside; a re-plan doesn't bring it back.
+        plan.set_pin(&kb, &inv, &vets, Pin { legacy: Some(1), ..Default::default() }, "d3");
+        assert_eq!(plan.pin.avoid.len(), 1);
+        assert!(plan.steps.iter().all(|s| !(s.run.trainee == 105201 && !s.finished())));
+        plan.undo("d4").unwrap();
+        plan.undo("d4").unwrap();
+        assert_eq!(plan.steps, before.steps, "undo brings the step back");
     }
 
     #[test]

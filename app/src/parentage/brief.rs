@@ -92,6 +92,8 @@ impl App {
             friend_lb: 4,
             pick_objective: crate::skill_opt::PickObjective::Rating,
             scenario: "Trackblazer".into(),
+            // Her skills become white sparks her runner may inherit: no debuffs among them.
+            banned_skills: self.kb.skills.keys().copied().filter(|id| self.is_debuff(*id)).collect(),
             ..Plan::default()
         };
         self.recommend_deck(true);
@@ -260,5 +262,23 @@ impl App {
         }
         let parents = s.parents.now.as_ref().map_or("her best two finished umas".into(), |l| l.legacies.iter().map(|i| super::parent_name(&self.kb, &inv.parents[*i])).collect::<Vec<_>>().join(" and "));
         Some(self.runner_brief(format!("Her own career for Team Trials ({}): she scores lowest on the team, so a better run of her raises it most.", row.name), &s.plan, Some((s.plan.target[1], row.name.to_string())), parents))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_careers_skip_debuffs() {
+        let mut a = App::for_tests();
+        let trainee = a.roster.umas[0].id;
+        let runner = a.roster.umas.iter().map(|u| u.id).find(|id| crate::affinity::chara(*id) != crate::affinity::chara(trainee)).unwrap();
+        let goal = Goal { runner, targets: vec![0, 4], ..Default::default() };
+        let run = Run { trainee, legacies: [0, 0], ..Default::default() };
+        let inv = a.parent_inventory();
+        let b = a.parent_brief(&goal, &run, &inv, 1);
+        assert!(!b.skills.is_empty(), "skills to target");
+        assert!(b.skills.iter().all(|s| !a.is_debuff(*s)), "no debuffs: they'd become the runner's white sparks");
     }
 }
