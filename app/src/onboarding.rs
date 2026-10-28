@@ -439,9 +439,18 @@ impl App {
         *self.planner.career_cache.borrow_mut() = None;
     }
 
-    /// A `.umalord.json` dropped on the window opens it in setup's Import step.
+    /// A `.umalord.json` dropped on the window opens it in setup's Import step; any other `.json`
+    /// is taken for finished umas (UmaExtractor's data.json) and imported.
     pub(crate) fn take_dropped_profile(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        if let Some(path) = dropped.iter().find(|p| {
+            let n = p.to_string_lossy().to_lowercase();
+            n.ends_with(".json") && !n.ends_with(profile::EXT)
+        }) {
+            let r = self.import_veterans(path);
+            self.toast_flag(r.map_or_else(|e| (e, true), |m| (m, false)));
+            return;
+        }
         let Some(path) = dropped.into_iter().find(|p| p.to_string_lossy().to_lowercase().ends_with(profile::EXT)) else { return };
         self.open_setup(Step::Import);
         match profile::read(&path) {

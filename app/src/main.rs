@@ -43,6 +43,7 @@ mod tab_skills;
 mod tab_umas;
 mod theme;
 mod ui_util;
+mod veterans;
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -86,6 +87,20 @@ fn main() -> eframe::Result {
         let stdin = std::io::stdin();
         let result = agent::mcp::serve(stdin.lock(), std::io::stdout(), move || agent::mcp::headless_app(root));
         std::process::exit(i32::from(result.is_err()));
+    }
+    // `umalord --import-veterans <data.json>`: import finished umas (UmaExtractor's format, or
+    // tools/read_veterans.py's) into account/veterans.json and account/parents.md.
+    if args.first().is_some_and(|a| a == "--import-veterans") {
+        let result = args.get(1).map(PathBuf::from).ok_or_else(|| "usage: umalord --import-veterans <data.json>".to_string()).and_then(|p| {
+            let root = data::find_root(None).ok_or("umaLord folder not found.")?;
+            App::new(Some(root)).import_veterans(&p)
+        });
+        let (msg, code) = match result {
+            Ok(m) => (m, 0),
+            Err(e) => (e, 1),
+        };
+        println!("{msg}");
+        std::process::exit(code);
     }
     // `umalord --export-profile [name]`: save the account to profiles/<name>-<date>.umalord.json.
     // `umalord --start-over [name]`: back the account up to profiles/backups/, then empty it.
