@@ -403,6 +403,9 @@ impl App {
         if vets.len() < before {
             msg += &format!(" That's fewer than before: the last import is kept in {}/backups/.", crate::profile::DIR);
         }
+        if let Some(note) = crate::parentage::track::load(&root).and_then(|plan| crate::parentage::text::import_note(&self.kb, &plan, &vets)) {
+            msg += &format!(" {note}");
+        }
         Ok(msg)
     }
 

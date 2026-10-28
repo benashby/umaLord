@@ -24,6 +24,7 @@ mod meta;
 mod notes;
 mod onboarding;
 mod onboarding_grid;
+mod parentage;
 mod paste;
 mod plan_sim;
 mod profile;

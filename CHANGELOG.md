@@ -16,6 +16,7 @@ What changed in each release. Releases are built from the tagged source by GitHu
 
 ### Fixed
 
+- Twelve second and third outfits (Grass Wonder [Saintly Jade Cleric], Oguri Cap [Ashen Miracle], Maruzensky [Hot☆Summer Night] and others) showed their first outfit's unique skill; each now has its own, matching the game's spark table.
 - On Linux, Downloads and Pictures follow the desktop's own folders (`~/.config/user-dirs.dirs`).
 - The planner's Upcoming CM legend puts ✔ announced and ? estimated on their own lines instead of wrapping mid-phrase.
 
