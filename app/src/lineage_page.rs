@@ -163,14 +163,21 @@ impl App {
     /// overview, each scrolling on its own so the setup stays in view; narrower, one column,
     /// the card first.
     pub(crate) fn panes(&mut self, ui: &mut egui::Ui, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
+        self.panes_with(ui, ACTION_W, head, action, overview);
+    }
+
+    /// `panes` with the action pane's width: fixed (the team views) or, at 1.0 or less, a share
+    /// of the page (One runner, where the step is the main content and the overview is short).
+    pub(crate) fn panes_with(&mut self, ui: &mut egui::Ui, action_w: f32, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let wide = ui.available_width() >= WIDE;
+        let action_w = if action_w <= 1.0 { (ui.available_width() - PANE_GAP) * action_w } else { action_w };
         head(self, ui);
         ui.add_space(8.0);
         if wide {
             let h = ui.available_height();
             ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(vec2(ACTION_W, h), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.set_width(ACTION_W);
+                ui.allocate_ui_with_layout(vec2(action_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(action_w);
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                     let mut sa = egui::ScrollArea::vertical().id_salt("lineage_action").auto_shrink([false, false]);
                     // UMALORD_SCROLL holds the action pane scrolled down, for screenshots.

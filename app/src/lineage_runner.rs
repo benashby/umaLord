@@ -12,7 +12,7 @@ use crate::parentage::track::{self, ParentPlan};
 use crate::parentage::{Goal, uma_name};
 use crate::theme::{pal, size};
 use crate::ui_util::semibold;
-use eframe::egui::{self, CornerRadius, RichText, Stroke};
+use eframe::egui::{self, CornerRadius, RichText, Stroke, vec2};
 
 /// What a Stuck panel preview would do, waiting for the player's go-ahead.
 #[derive(Clone)]
@@ -79,13 +79,20 @@ impl App {
         }
         let brief = self.lineage.runner.brief.as_ref().map(|(_, b)| b.clone()).filter(|_| current.is_some());
         let p = pal(ui);
-        self.panes(
+        self.panes_with(
             ui,
+            0.62,
             |this, ui| {
                 ui.horizontal_wrapped(|ui| {
                     this.avatar(ui, plan.goal.runner, 32.0);
                     ui.label(semibold(format!("Parent plan for {}", uma_name(&this.kb, plan.goal.runner)), size::XL));
                     ui.label(RichText::new(format!("{} at A at the start", plan.goal.targets.iter().map(|t| crate::parentage::APTITUDES[*t]).collect::<Vec<_>>().join(", "))).size(13.0).color(p.weak));
+                    if ui.small_button("Start a new plan").on_hover_text("The current plan moves to plans/past-parent-plans").clicked() {
+                        if let Some(root) = this.root.clone() {
+                            let _ = track::cancel(&root, &crate::ui_util::today());
+                        }
+                        this.lineage.runner = RunnerState { loaded: true, ..Default::default() };
+                    }
                 });
                 this.constraints_strip(ui, &plan);
             },
@@ -131,14 +138,6 @@ impl App {
                     for l in plan.log.iter().rev().take(8) {
                         ui.add(egui::Label::new(RichText::new(l).size(12.5).color(p.weak)).wrap());
                     }
-                    ui.horizontal(|ui| {
-                        if ui.button("Start a new plan").on_hover_text("The current plan moves to plans/past-parent-plans").clicked() {
-                            if let Some(root) = this.root.clone() {
-                                let _ = track::cancel(&root, &crate::ui_util::today());
-                            }
-                            this.lineage.runner = RunnerState { loaded: true, ..Default::default() };
-                        }
-                    });
                 });
             },
         );
@@ -170,6 +169,7 @@ impl App {
             ui.label(RichText::new("Pick a runner and what must start at A. The planner works out the parent careers, cheapest first, and tracks them as you import finished umas.").size(13.0).color(p.weak));
             ui.add_space(8.0);
             let (mut runner, mut surface, mut distance, mut style) = self.lineage.runner.pick;
+            let picked_before = runner;
             let owned: Vec<u32> = self.roster.umas.iter().map(|u| u.id).collect();
             ui.horizontal_wrapped(|ui| {
                 egui::ComboBox::from_id_salt("runner_pick").width(260.0).selected_text(runner.map_or("Runner…".into(), |r| uma_name(&self.kb, r))).show_ui(ui, |ui| {
@@ -178,6 +178,7 @@ impl App {
                     }
                 });
                 for (label, value, options) in [("Surface", &mut surface, &["Turf", "Dirt"][..]), ("Distance", &mut distance, &["Sprint", "Mile", "Medium", "Long"][..]), ("Style", &mut style, &["Front Runner", "Pace Chaser", "Late Surger", "End Closer"][..])] {
+                    ui.label(RichText::new(label).size(12.5).color(p.weak));
                     egui::ComboBox::from_id_salt(label).selected_text(options[*value]).show_ui(ui, |ui| {
                         for (k, o) in options.iter().enumerate() {
                             ui.selectable_value(value, k, *o);
@@ -185,11 +186,19 @@ impl App {
                     });
                 }
             });
+            // A newly chosen runner starts at her own best grades.
+            if runner != picked_before
+                && let Some(a) = runner.and_then(|r| self.kb.umas.get(&r)).map(|u| u.aptitude.clone())
+            {
+                use crate::knowledge::{Distance, Surface, grade_rank};
+                surface = Surface::ALL.iter().enumerate().max_by_key(|(_, s)| grade_rank(a.surface(**s))).map_or(0, |x| x.0);
+                distance = Distance::ALL.iter().enumerate().max_by_key(|(_, d)| grade_rank(a.distance(**d))).map_or(2, |x| x.0);
+                style = a.best_style() as usize;
+            }
             self.lineage.runner.pick = (runner, surface, distance, style);
             ui.add_space(8.0);
-            if let Some(r) = runner
-                && ui.add(crate::ui_util::primary_button(ui, "Plan her parents", 14.0)).clicked()
-            {
+            let go = ui.add_enabled(runner.is_some(), crate::ui_util::primary_button(ui, "Plan her parents", 14.0)).on_disabled_hover_text("Pick a runner first");
+            if let Some(r) = runner.filter(|_| go.clicked()) {
                 match self.plan_for(r, Some(vec![surface, 2 + distance, 6 + style])) {
                     Ok(plan) => {
                         if let Some(root) = &self.root {
@@ -286,6 +295,23 @@ impl App {
                 crate::lineage_kit::odds_dots(ui, run.p, p.accent, p.border);
                 ui.label(RichText::new(format!("{} a career ({:.1}%); usually {typical}.", crate::parentage::verify::one_in(run.p), run.p * 100.0)).size(13.0));
             });
+            // The careers run so far as dots, a ring at the 9-in-10 mark.
+            ui.horizontal(|ui| {
+                let total = n.max(unlucky) + 1;
+                let d = 10.0;
+                let (rect, _) = ui.allocate_exact_size(vec2(total as f32 * (d + 3.0), d + 4.0), egui::Sense::hover());
+                for k in 0..total {
+                    let c = egui::pos2(rect.left() + d / 2.0 + k as f32 * (d + 3.0), rect.center().y);
+                    if k < n {
+                        ui.painter().circle_filled(c, d / 2.0, if k + 1 >= unlucky { crate::lineage_kit::ink(p.warn, p.surface) } else { p.weak });
+                    } else {
+                        ui.painter().circle_stroke(c, d / 2.0 - 0.5, Stroke::new(1.0, p.border));
+                    }
+                    if k + 1 == unlucky {
+                        ui.painter().circle_stroke(c, d / 2.0 + 2.5, Stroke::new(1.5, p.text));
+                    }
+                }
+            });
             ui.horizontal_wrapped(|ui| {
                 let mark = if past_mark { format!("Career {} · past the 9-in-10 mark", n + 1) } else { format!("Career {}", n + 1) };
                 ui.label(semibold(mark, 13.0).color(if past_mark { crate::lineage_kit::ink(p.warn, p.surface) } else { p.text }));
@@ -310,17 +336,46 @@ impl App {
         egui::Frame::new().fill(crate::lineage_kit::tint(p.warn, p.surface, 0.08)).stroke(Stroke::new(1.0, p.warn.gamma_multiply(0.5))).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(semibold(format!("Stuck on step {}?", i + 1), 14.5));
-            ui.label(RichText::new(format!("You've run {n} careers; 9 in 10 players hit this step by career {unlucky}.")).size(12.5).color(p.weak));
+            let panel_bg = crate::lineage_kit::tint(p.warn, p.surface, 0.08);
+            ui.label(RichText::new(format!("You've run {n} careers. About 9 in 10 players are done by career {unlucky}; the other 1 in 10, like you, are still going.")).size(12.5).color(crate::lineage_kit::ink(p.weak, panel_bg)));
             ui.add_space(6.0);
             // A preview waiting for the go-ahead replaces the three choices.
             if let Some((what, after, msg)) = self.lineage.runner.preview.clone() {
                 let before: f64 = plan.remaining().iter().map(Run::careers).sum();
                 let now: f64 = after.iter().map(Run::careers).sum();
-                ui.label(semibold(match &what { Pending::Settle(id) => format!("Keep #{id} for step {}", i + 1), Pending::Route => "Use another route".into() }, 13.5));
-                ui.add(egui::Label::new(RichText::new(&msg).size(12.5)).wrap());
-                ui.label(RichText::new(format!("Careers left: about {before:.0} → about {now:.0}")).size(13.0));
+                ui.label(semibold(match &what { Pending::Settle(id) => format!("Settle step {} with #{id}", i + 1), Pending::Route => "Try another route".into() }, 13.5));
+                // The step that would come next, as the planner has it.
+                if let Some(first) = after.first() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("New next step:").size(12.5).color(p.weak));
+                        self.avatar(ui, first.trainee, 24.0);
+                        ui.label(semibold(uma_name(&self.kb, first.trainee), 13.0));
+                        if first.legacies != [0, 0] {
+                            ui.label(RichText::new("with").size(12.5).color(p.weak));
+                            for (id, uma) in first.legacies.iter().zip(first.legacy_umas) {
+                                self.avatar(ui, uma, 20.0);
+                                ui.label(RichText::new(format!("#{id}")).size(12.5));
+                            }
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for w in &first.must {
+                            let (kind, name, stars) = w.chip(&self.kb);
+                            crate::lineage_kit::spark_chip(ui, crate::lineage_kit::Spark::of(kind), &name, 0, Some(stars), false, true);
+                        }
+                        crate::lineage_kit::odds_dots(ui, first.p, p.accent, p.border);
+                        ui.label(RichText::new(crate::parentage::verify::one_in(first.p)).size(12.5));
+                    });
+                } else {
+                    ui.label(RichText::new("No steps left after this: her lineage would be ready.").size(12.5));
+                }
+                ui.add(egui::Label::new(RichText::new(&msg).size(12.5).color(p.weak)).wrap());
+                let saving = before - now;
+                ui.label(RichText::new(if saving.abs() < 0.5 { format!("No faster: about {before:.0} careers left either way, with a fresh chance of luck.") } else if saving > 0.0 { format!("Careers left: about {before:.0} → about {now:.0} ({saving:.0} fewer).") } else { format!("Careers left: about {before:.0} → about {now:.0} ({:.0} more).", -saving) }).size(13.0));
+                ui.label(RichText::new("Nothing changes until you press the button.").size(12.0).color(p.weak));
                 ui.horizontal(|ui| {
-                    if ui.add(crate::ui_util::primary_button(ui, "Do it", 13.0)).clicked() {
+                    let label = match &what { Pending::Settle(_) => "Settle with her", Pending::Route => "Use this route" };
+                    if ui.add(crate::ui_util::primary_button(ui, label, 13.0)).clicked() {
                         match what {
                             Pending::Settle(id) => self.runner_do(move |plan, kb, inv, vets, today| plan.settle(kb, inv, vets, id, today)),
                             Pending::Route => self.runner_do(|plan, kb, inv, vets, today| plan.another_route(kb, inv, vets, today)),
@@ -338,7 +393,7 @@ impl App {
                 prose(ui, "Keep the one that came closest. The steps before stay done; the rest is planned again from her actual sparks.");
                 let closest = plan.closest(vets);
                 if closest.is_empty() {
-                    ui.label(RichText::new(format!("No {} finished since this step began.", uma_name(&this.kb, run.trainee))).size(12.5).color(p.weak));
+                    ui.label(RichText::new(format!("No {} finished since this step began.", uma_name(&this.kb, run.trainee))).size(12.5).color(crate::lineage_kit::ink(p.weak, crate::lineage_kit::tint(p.warn, p.surface, 0.08))));
                 }
                 for h in closest.iter().take(3) {
                     ui.horizontal_wrapped(|ui| {
@@ -373,9 +428,9 @@ impl App {
             let keep_ui = |this: &mut Self, ui: &mut egui::Ui| {
                 ui.label(semibold("3 · Keep going", 13.5));
                 let (_, tail) = crate::parentage::verify::step_spread(run.p);
-                prose(ui, &format!("Each career still hits {}. 1 in 10 players need {tail} or more; you're one of them, not doing it wrong.", crate::parentage::verify::one_in(run.p)));
+                prose(ui, &format!("Each career still hits {}: bad luck doesn't change the odds. About 1 in 10 players need {tail} or more careers; that's luck, not a mistake.", crate::parentage::verify::one_in(run.p)));
                 prose(ui, "Costs nothing to decide; this closes until you open it again.");
-                if ui.button("Keep going").clicked() {
+                if ui.add(crate::ui_util::primary_button(ui, "Keep going", 13.0)).clicked() {
                     this.lineage.runner.stuck_open = Some(false);
                 }
             };
