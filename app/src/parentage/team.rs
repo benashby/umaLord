@@ -128,11 +128,12 @@ impl App {
     /// The team for a Champions Meeting. Runs the simulator, so it takes a few seconds.
     pub(crate) fn cm_team(&mut self, preset: &EventPreset, opts: &TeamOpts) -> Result<CmTeam, String> {
         let inv = self.parent_inventory();
-        if inv.parents.is_empty() {
-            return Err("Import your finished umas first (Settings → Profile → Import finished umas).".into());
-        }
         let saved = std::mem::take(&mut self.planner.plan);
-        let out = self.cm_team_inner(preset, opts, &inv);
+        let mut out = self.cm_team_inner(preset, opts, &inv);
+        // Without finished umas the team, decks and skills still stand; parents wait for an import.
+        if let (Ok(t), true) = (&mut out, inv.parents.is_empty()) {
+            t.notes.push("No finished umas imported yet, so parents aren't planned: import them (Settings → Profile → Import finished umas) and plan again.".into());
+        }
         self.planner.plan = saved;
         out
     }

@@ -81,7 +81,11 @@ fn name_id(kb: &Knowledge, inv: &Inventory, id: u64) -> String {
 fn step(kb: &Knowledge, inv: &Inventory, n: usize, r: &Run) -> String {
     let legacies: Vec<String> = r.legacies.iter().map(|id| name_id(kb, inv, *id)).collect();
     let labels = |ws: &[super::jobs::Want]| ws.iter().map(|w| w.label(kb)).collect::<Vec<_>>().join(", ");
-    let mut out = format!("Step {n}: a career of {} with {} as her legacies.\n", uma_name(kb, r.trainee), legacies.join(" and "));
+    let mut out = if r.legacies == [0, 0] {
+        format!("Step {n}: a career of {} with any two legacies (yours or a friend's; best without pinks that raise her other aptitudes to A).\n", uma_name(kb, r.trainee))
+    } else {
+        format!("Step {n}: a career of {} with {} as her legacies.\n", uma_name(kb, r.trainee), legacies.join(" and "))
+    };
     if r.legacies.iter().any(|id| super::is_borrowed(*id)) {
         out += "  The borrowed legacy has to be borrowed again for every career of this step, while the friend still lists her.\n";
     }

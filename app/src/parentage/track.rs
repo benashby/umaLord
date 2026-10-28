@@ -355,6 +355,10 @@ impl ParentPlan {
 /// Whether a finished uma ran with the step's two legacies. The game keeps a parent's outfit,
 /// not its id, so outfits are compared.
 fn same_parents(step: &Step, v: &Veteran, vets: &[Veteran]) -> bool {
+    // A starter step takes any two legacies.
+    if step.run.legacies == [0, 0] {
+        return true;
+    }
     v.ancestor(10).zip(v.ancestor(20)).is_some_and(|(a, b)| {
         // The outfits the step recorded, else (an older plan) the legacies still imported.
         let mut want: Vec<u32> = if step.run.legacy_umas.iter().all(|u| *u > 0) {

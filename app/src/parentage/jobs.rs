@@ -297,6 +297,10 @@ pub fn borrow_wish(kb: &Knowledge, goal: &Goal, inv: &Inventory) -> Option<Borro
     Some(BorrowWish { partner: w.id, stars, green, charas, possible: pinks <= 3 })
 }
 
+/// A starter step's legacies: any two (the player's own or a friend's), when the account has
+/// fewer than two finished umas to plan with.
+const ANY: usize = usize::MAX;
+
 /// The id step 1's product stands under while step 2 is planned with her as a parent.
 pub const FROM_STEP: u64 = u64::MAX - 3000;
 
@@ -368,6 +372,21 @@ fn for_each_cand(kb: &Knowledge, goal: &Goal, inv: &Inventory, need: &[(usize, u
         let green = goal.green == Some(t) && stars >= 3;
         let direct = aff.pair(goal.runner, t);
         let trio: Vec<u32> = ps.iter().map(|p| aff.shared(&[goal.runner, t, p.uma])).collect();
+        // Fewer than two finished umas: a starter career with any two legacies, her own grades deciding the pink.
+        if ps.len() < 2 && with.is_none() {
+            for (j, (i, n)) in need.iter().enumerate() {
+                let (even, weighted) = super::outcome::pink_odds(&base, *i);
+                let (low, best) = (even.min(weighted), even.max(weighted));
+                if low <= 0.0 || *n == 0 {
+                    continue;
+                }
+                for k in 1..=3u8 {
+                    let mut brings = vec![0; need.len()];
+                    brings[j] = u32::from(k).min(*n);
+                    f(&Cand { trainee: t, legacies: [ANY, ANY], pink: Some((*i, k)), brings, green, p: low * at_least(PINK_STARS, k), p_best: best * at_least(PINK_STARS, k), tie: direct });
+                }
+            }
+        }
         for a in 0..ps.len() {
             if ps[a].chara() == chara(t) {
                 continue;
@@ -486,6 +505,9 @@ fn best_pair(goal: &Goal, need: &[(usize, u32)], left: &ByJob, right: &ByJob) ->
 
 /// A considered career as a step, and the finished uma it would leave at its must-haves.
 fn to_run(kb: &Knowledge, goal: &Goal, inv: &Inventory, c: &Cand) -> (Run, Parent) {
+    if c.legacies[0] == ANY {
+        return starter_run(kb, goal, c);
+    }
     let [a, b] = c.legacies.map(|i| &inv.parents[i]);
     let mut must = Vec::new();
     let mut nice = Vec::new();
@@ -511,6 +533,32 @@ fn to_run(kb: &Knowledge, goal: &Goal, inv: &Inventory, c: &Cand) -> (Run, Paren
     }
     let run = Run { trainee: c.trainee, legacies: [a.id, b.id], legacy_umas: [a.uma, b.uma], must, nice, p: c.p, p_best: c.p_best };
     (run, Parent::planned(kb, c.trainee, own, a, b))
+}
+
+/// A starter step: her career with any two legacies, for the pink her own grades make likely.
+fn starter_run(kb: &Knowledge, goal: &Goal, c: &Cand) -> (Run, Parent) {
+    let mut must = Vec::new();
+    let mut nice = Vec::new();
+    let mut own = Vec::new();
+    if let Some((i, k)) = c.pink {
+        must.push(Want::Pink { aptitude: i, stars: k });
+        own.push(pink_spark(i, k));
+        if k < 3 {
+            nice.push(Want::Pink { aptitude: i, stars: k + 1 });
+        }
+    }
+    if c.green {
+        must.push(Want::Green { uma: c.trainee, stars: 1 });
+        own.push(green_spark(c.trainee, 1));
+    }
+    for (stat, w) in goal.stats.iter().enumerate() {
+        if *w > 0 {
+            nice.push(Want::Blue { stat, stars: 2 });
+        }
+    }
+    let run = Run { trainee: c.trainee, legacies: [0, 0], legacy_umas: [0, 0], must, nice, p: c.p, p_best: c.p_best };
+    let legacy = crate::affinity::Legacy { uma: c.trainee, wins: Default::default(), parents: [None, None] };
+    (run, Parent::build(kb, 0, c.trainee, own, [None, None], legacy))
 }
 
 #[cfg(test)]
@@ -623,6 +671,18 @@ mod tests {
         assert!(w.charas.windows(2).all(|x| x[0].1 >= x[1].1));
     }
 
+    /// No finished umas: two starter careers, each for a pink her own grades make likely, paired.
+    #[test]
+    fn starter_route_without_finished_umas() {
+        let kb = kb();
+        // Kitasan Black [Gilded Shrine to Glory] for Late (C: 4 stars): two Late pinks, 2★ each.
+        let goal = Goal { runner: 106801, targets: vec![8], ..Default::default() };
+        let p = propose(&kb, &goal, &inv(vec![], vec![(105201, 3), (101901, 3)]));
+        assert_eq!(p.steps.len(), 2, "{p:?}");
+        assert!(p.steps.iter().all(|s| s.legacies == [0, 0]));
+        assert!(p.after.as_ref().is_some_and(Lineage::meets));
+    }
+
     #[test]
     fn wants_read_sparks() {
         let kb = kb();
@@ -670,7 +730,7 @@ fn parentage_real_account() {
                         assert!(p.after.as_ref().is_some_and(Lineage::meets), "{name}: route doesn't meet the goal");
                         for s in &p.steps {
                             assert!(chara(s.trainee) != chara(runner), "{name}: runner's own character as a step");
-                            for id in s.legacies.iter().filter(|id| **id != FROM_STEP) {
+                            for id in s.legacies.iter().filter(|id| **id != FROM_STEP && **id != 0) {
                                 assert!(inv.by_id(*id).is_some_and(|l| l.chara() != chara(s.trainee)), "{name}: a step's legacy is her own character");
                             }
                             assert!(p.over_cap || s.careers() <= CAP, "{name}: past the cap unmarked");
