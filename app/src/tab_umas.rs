@@ -774,10 +774,40 @@ impl App {
         });
         ui.add_space(8.0);
 
-        let Some(info) = info else {
+        if info.is_none() {
             ui.label(RichText::new("No knowledge data for this outfit yet. Rebuild knowledge/data.").color(pal(ui).warn));
             return;
-        };
+        }
+        self.uma_sections(ui, uma.id, Some(uma.potential));
+
+        let outfits: Vec<&Uma> = self.roster.umas.iter().filter(|u| u.name == uma.name && u.id != uma.id).collect();
+        let own_cards: Vec<_> = self.roster.cards.iter().filter(|c| c.uma == uma.name).collect();
+        if !outfits.is_empty() || !own_cards.is_empty() {
+            card_titled(ui, "Related", |ui| {
+                for u in outfits {
+                    if ui.link(format!("🐴 [{}] {}★ P{}", u.outfit, u.stars, u.potential)).clicked() {
+                        self.jump.set(Some(Jump::Uma(u.id)));
+                    }
+                }
+                if !own_cards.is_empty() {
+                    ui.label(RichText::new(format!("Your {} cards can't go in her own deck.", uma.name)).size(12.0).color(p.weak));
+                    for c in own_cards {
+                        if ui.link(format!("🃏 {} {} [{}] LB{}", c.rarity.label(), c.card_type.label(), c.title, c.lb)).clicked() {
+                            self.jump.set(Some(Jump::Card(c.id)));
+                        }
+                    }
+                }
+            });
+        }
+        ui.add_space(10.0);
+    }
+
+    /// Everything known about an outfit, below its header: aptitudes, stats, skills (locked above
+    /// `potential` when she's owned), evolutions, objectives and events. Collection's detail panel
+    /// and the detail pop-up both draw it.
+    pub(crate) fn uma_sections(&mut self, ui: &mut egui::Ui, id: u32, potential: Option<u8>) {
+        let p = pal(ui);
+        let Some(info) = self.kb.umas.get(&id).cloned() else { return };
 
         card_explained(ui, "Aptitudes", "S and A are ideal. Below A she runs slower there, unless parents' pink sparks raise the grade.", |ui| {
             let a = &info.aptitude;
@@ -832,7 +862,7 @@ impl App {
             let mut levels: Vec<u8> = info.skills.iter().map(|s| s.potential).collect();
             levels.dedup();
             for lvl in levels {
-                let locked = lvl > uma.potential;
+                let locked = potential.is_some_and(|p| lvl > p);
                 let title = if lvl <= 1 { "INNATE".to_string() } else { format!("POTENTIAL {lvl}{}", if locked { "  🔒 locked" } else { "" }) };
                 ui.label(RichText::new(title).size(11.0).color(if locked { pal(ui).warn } else { p.weak }));
                 ui.horizontal_wrapped(|ui| {
@@ -885,7 +915,7 @@ impl App {
         if !info.events.is_empty() {
             card_explained(ui, &format!("Events ({})", info.events.len()), "Story events in her career and what each choice gives. Click one to open it.", |ui| {
                 for (i, e) in info.events.iter().enumerate() {
-                    egui::CollapsingHeader::new(RichText::new(&e.name)).id_salt(("uma_ev", uma.id, i)).show(ui, |ui| {
+                    egui::CollapsingHeader::new(RichText::new(&e.name)).id_salt(("uma_ev", id, i)).show(ui, |ui| {
                         ui.label(RichText::new(&e.kind).size(11.5).color(p.weak));
                         for (n, o) in e.options.iter().enumerate() {
                             let label = if e.options.len() > 1 { format!("Option {}", n + 1) } else { "Outcome".to_string() };
@@ -899,26 +929,6 @@ impl App {
             });
         }
 
-        let outfits: Vec<&Uma> = self.roster.umas.iter().filter(|u| u.name == uma.name && u.id != uma.id).collect();
-        let own_cards: Vec<_> = self.roster.cards.iter().filter(|c| c.uma == uma.name).collect();
-        if !outfits.is_empty() || !own_cards.is_empty() {
-            card_titled(ui, "Related", |ui| {
-                for u in outfits {
-                    if ui.link(format!("🐴 [{}] {}★ P{}", u.outfit, u.stars, u.potential)).clicked() {
-                        self.jump.set(Some(Jump::Uma(u.id)));
-                    }
-                }
-                if !own_cards.is_empty() {
-                    ui.label(RichText::new(format!("Your {} cards can't go in her own deck.", uma.name)).size(12.0).color(p.weak));
-                    for c in own_cards {
-                        if ui.link(format!("🃏 {} {} [{}] LB{}", c.rarity.label(), c.card_type.label(), c.title, c.lb)).clicked() {
-                            self.jump.set(Some(Jump::Card(c.id)));
-                        }
-                    }
-                }
-            });
-        }
-        ui.add_space(10.0);
     }
 }
 

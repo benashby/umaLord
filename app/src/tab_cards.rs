@@ -1434,29 +1434,56 @@ impl App {
         });
         ui.add_space(8.0);
 
-        let Some(info) = self.info(card.id).cloned() else {
+        if self.info(card.id).is_none() {
             ui.label(RichText::new("No knowledge data for this card yet. Rebuild knowledge/data.").color(pal(ui).warn));
             return;
-        };
-        let level = u32::from(card.level);
-        let max_level = u32::from(card.rarity.max_level(4));
+        }
+        self.card_sections(ui, card.id, Some(u32::from(card.level)));
 
-        card_explained(ui, "Support effects", "What the card adds to training. Green numbers in the last column are what you'd gain by maxing it.", |ui| {
-            egui::Grid::new("card_effects").num_columns(3).striped(true).spacing([18.0, 5.0]).show(ui, |ui| {
+        let others: Vec<&SupportCard> = self.roster.cards.iter().filter(|c| c.uma == card.uma && c.id != card.id).collect();
+        if !others.is_empty() {
+            card_titled(ui, &format!("Other {} cards", card.uma), |ui| {
+                for c in others {
+                    if ui.link(format!("🃏 {} {} [{}] LB{}", c.rarity.label(), c.card_type.label(), c.title, c.lb)).clicked() {
+                        self.jump.set(Some(Jump::Card(c.id)));
+                    }
+                }
+            });
+        }
+        ui.add_space(10.0);
+    }
+
+    /// Everything known about a card, below its header: its effects at `level` (owned) beside
+    /// their MLB values, its unique effect, the skills it teaches and its events. Collection's
+    /// detail panel and the detail pop-up both draw it.
+    pub(crate) fn card_sections(&mut self, ui: &mut egui::Ui, id: u32, level: Option<u32>) {
+        let p = pal(ui);
+        let Some(info) = self.info(id).cloned() else { return };
+        let max_level = u32::from(crate::data::Rarity::from_id(id).unwrap_or(crate::data::Rarity::SSR).max_level(4));
+
+        let explain = if level.is_some() { "What the card adds to training. Green numbers in the last column are what you'd gain by maxing it." } else { "What the card adds to training, fully limit broken (MLB)." };
+        card_explained(ui, "Support effects", explain, |ui| {
+            egui::Grid::new(("card_effects", id)).num_columns(3).striped(true).spacing([18.0, 5.0]).show(ui, |ui| {
                 ui.label(RichText::new("Effect").color(p.weak));
-                ui.label(RichText::new(format!("Yours · Lv {level}")).color(p.weak));
+                if let Some(level) = level {
+                    ui.label(RichText::new(format!("Yours · Lv {level}")).color(p.weak));
+                }
                 ui.label(RichText::new(format!("MLB · Lv {max_level}")).color(p.weak));
                 ui.end_row();
                 for e in &info.effects {
-                    let now = effect_at(&e.points, level);
+                    let now = level.and_then(|l| effect_at(&e.points, l));
                     let max = effect_at(&e.points, max_level);
                     if now.unwrap_or(0) == 0 && max.unwrap_or(0) == 0 {
                         continue;
                     }
                     ui.label(&e.name);
-                    ui.label(semibold(now.map_or("—".to_string(), |v| v.to_string()), 14.0));
                     let max_text = max.map_or("—".to_string(), |v| v.to_string());
-                    ui.label(if max != now { semibold(max_text, 14.0).color(pal(ui).good) } else { RichText::new(max_text).color(p.weak) });
+                    if level.is_some() {
+                        ui.label(semibold(now.map_or("—".to_string(), |v| v.to_string()), 14.0));
+                        ui.label(if max != now { semibold(max_text, 14.0).color(pal(ui).good) } else { RichText::new(max_text).color(p.weak) });
+                    } else {
+                        ui.label(semibold(max_text, 14.0));
+                    }
                     ui.end_row();
                 }
             });
@@ -1464,11 +1491,11 @@ impl App {
 
         if let Some(u) = &info.unique {
             card_explained(ui, "Unique effect", "An extra effect only this card has, once it reaches the level shown.", |ui| {
-                if level >= u.level {
-                    badge(ui, format!("Active · from Lv {}", u.level), p.accent);
-                } else {
-                    badge(ui, format!("Locked until Lv {}", u.level), pal(ui).warn);
-                }
+                match level {
+                    Some(l) if l >= u.level => badge(ui, format!("Active · from Lv {}", u.level), p.accent),
+                    Some(_) => badge(ui, format!("Locked until Lv {}", u.level), pal(ui).warn),
+                    None => badge(ui, format!("From Lv {}", u.level), p.weak),
+                };
                 ui.add_space(4.0);
                 if !u.condition.is_empty() {
                     ui.label(RichText::new(format!("{}:", u.condition)).color(p.weak));
@@ -1505,7 +1532,7 @@ impl App {
         if !info.events.is_empty() {
             card_explained(ui, &format!("Events ({})", info.events.len()), "The card's story events and what each choice gives. Click one to open it.", |ui| {
                 for (i, e) in info.events.iter().enumerate() {
-                    egui::CollapsingHeader::new(&e.title).id_salt(("card_ev", card.id, i)).show(ui, |ui| {
+                    egui::CollapsingHeader::new(&e.title).id_salt(("card_ev", id, i)).show(ui, |ui| {
                         ui.label(RichText::new(&e.kind).size(11.5).color(p.weak));
                         if e.options.is_empty() {
                             ui.label(RichText::new("No outcome data.").color(p.weak));
@@ -1525,18 +1552,6 @@ impl App {
                 }
             });
         }
-
-        let others: Vec<&SupportCard> = self.roster.cards.iter().filter(|c| c.uma == card.uma && c.id != card.id).collect();
-        if !others.is_empty() {
-            card_titled(ui, &format!("Other {} cards", card.uma), |ui| {
-                for c in others {
-                    if ui.link(format!("🃏 {} {} [{}] LB{}", c.rarity.label(), c.card_type.label(), c.title, c.lb)).clicked() {
-                        self.jump.set(Some(Jump::Card(c.id)));
-                    }
-                }
-            });
-        }
-        ui.add_space(10.0);
     }
 }
 
