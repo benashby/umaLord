@@ -665,7 +665,7 @@ impl App {
         let comparing = self.cards.compare.contains(&card.id);
         if ui.is_rect_visible(rect) {
             match self.art_uri("cards", card.id) {
-                Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(8)).paint_at(ui, img),
+                Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(8)), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                 None => placeholder(ui.painter(), img, type_color(card.card_type), &card.uma),
             }
             let p = pal(ui);
@@ -1190,7 +1190,7 @@ impl App {
         if ui.is_rect_visible(rect) {
             let alpha = if owned.is_some() { 255 } else { 150 };
             match self.art_uri("cards", c.id) {
-                Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(6)).tint(Color32::from_white_alpha(alpha)).paint_at(ui, img),
+                Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(6)).tint(Color32::from_white_alpha(alpha)), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                 None => placeholder(ui.painter(), img, type_color_str(&c.kind), &c.uma),
             }
             let painter = ui.painter();

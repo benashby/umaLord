@@ -31,6 +31,13 @@ pub(crate) struct Open {
     finished: Vec<Finished>,
 }
 
+/// What the uma header shows beside her art, so the body leaves it out.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Glance {
+    aptitudes: bool,
+    stats: bool,
+}
+
 /// Wider windows get the large art; the pop-up is 880 px at most, 92% of a narrow window.
 const MAX_W: f32 = 880.0;
 
@@ -93,10 +100,15 @@ impl App {
         let w = (screen.width() * 0.92).min(MAX_W);
         let max_h = screen.height() * 0.9;
         // The large art on a big window; a short one keeps the header small so the body has room.
-        let art = if screen.height() < 700.0 { 0.5 } else if screen.width() >= 1200.0 { 1.0 } else { 0.75 };
+        // The art's scale: full size on a big window, smaller on a narrow one, and never taller
+        // than about 38% of the window, so the body keeps room to scroll. Below 0.6 the uma's
+        // full-body art gives way to her round icon.
+        let by_width: f32 = if screen.width() >= 1200.0 { 1.0 } else { 0.75 };
+        let by_height = (screen.height() * 0.38 / 400.0).min(1.0);
+        let art = by_width.min(by_height);
         let mut close = false;
         let mut back = false;
-        let mut glanced = false;
+        let mut glanced = Glance::default();
         let modal = egui::Modal::new(egui::Id::unique("detail_modal"))
             .backdrop_color(egui::Color32::from_black_alpha(200))
             .frame(egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18)).corner_radius(CornerRadius::same(14)).stroke(egui::Stroke::new(1.0, crate::theme::palette(ctx.global_style().visuals.dark_mode).border)))
@@ -108,13 +120,14 @@ impl App {
                 let start = ui.min_rect().top();
                 let corner = egui::Rect::from_min_size(egui::pos2(ui.max_rect().right() - 34.0, start - 6.0), vec2(40.0, 40.0));
                 let x = egui::Button::new(RichText::new("✕").size(18.0)).corner_radius(CornerRadius::same(20)).fill(p.hover);
-                if ui.put(corner, x).on_hover_text("Close (Esc, or click outside)").clicked() {
+                // Child uis, so the buttons take no row of their own and the header starts at the top.
+                if ui.new_child(egui::UiBuilder::new().max_rect(corner)).add(x).on_hover_text("Close (Esc, or click outside)").clicked() {
                     close = true;
                 }
                 if self.details.len() > 1 {
                     // ← Back on the ✕'s row, left of the header.
                     let left = egui::Rect::from_min_size(egui::pos2(ui.max_rect().right() - 130.0, start - 2.0), vec2(86.0, 32.0));
-                    if ui.put(left, egui::Button::new(RichText::new("← Back").size(size::BODY))).on_hover_text("Back to the previous pop-up").clicked() {
+                    if ui.new_child(egui::UiBuilder::new().max_rect(left)).add(egui::Button::new(RichText::new("← Back").size(size::BODY))).on_hover_text("Back to the previous pop-up").clicked() {
                         back = true;
                     }
                 }
@@ -131,13 +144,13 @@ impl App {
                 }
                 ui.add_space(8.0);
                 let used = ui.min_rect().bottom() - start;
-                let body_h = (max_h - used - 60.0).max(160.0);
+                let body_h = (max_h - used - 60.0).max(100.0);
                 egui::ScrollArea::vertical().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).id_salt(("detail_body", self.details.len())).max_height(body_h).auto_shrink([false, true]).show(ui, |ui| match open.what {
                     Detail::Card(id) => {
                         let level = self.roster.cards.iter().find(|c| c.id == id).map(|c| u32::from(c.level));
                         self.card_sections(ui, id, level);
                     }
-                    Detail::Uma(outfit) => self.uma_body(ui, outfit, &open.finished, !glanced),
+                    Detail::Uma(outfit) => self.uma_body(ui, outfit, &open.finished, glanced),
                 });
                 ui.separator();
                 if self.detail_footer(ui, open.what) {
@@ -163,8 +176,8 @@ impl App {
         let h = 240.0 * art;
         ui.horizontal_top(|ui| {
             match self.art_uri("cards", id) {
-                Some(uri) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(h * 0.75, h)).corner_radius(CornerRadius::same(10))),
-                None => _ = ui.allocate_exact_size(vec2(h * 0.75, h), egui::Sense::hover()),
+                Some(uri) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(h * 260.0 / 346.0, h)).corner_radius(CornerRadius::same(10))),
+                None => _ = ui.allocate_exact_size(vec2(h * 260.0 / 346.0, h), egui::Sense::hover()),
             }
             ui.add_space(8.0);
             ui.vertical(|ui| {
@@ -196,7 +209,7 @@ impl App {
         });
     }
 
-    fn uma_head(&mut self, ui: &mut egui::Ui, outfit: u32, art: f32) -> bool {
+    fn uma_head(&mut self, ui: &mut egui::Ui, outfit: u32, art: f32) -> Glance {
         let p = pal(ui);
         let full = crate::parentage::uma_name(&self.kb, outfit);
         let (name, title) = full.split_once(" [").map_or((full.clone(), String::new()), |(n, t)| (n.to_string(), format!("[{t}")));
@@ -204,13 +217,22 @@ impl App {
         let s = (160.0 * art).max(80.0);
         // Her full-body render once it's downloaded (a short window keeps the round icon, so the
         // body has room); the render's sides are empty, so only its middle half is drawn.
-        let full = self.art_uri("umas-full", outfit).filter(|_| art >= 0.75);
-        let wide = full.is_some();
+        let full = self.art_uri("umas-full", outfit).filter(|_| art >= 0.6);
+        // Her grades and stats join the header only when the window is tall enough to keep the
+        // body's room; otherwise they stay in the body.
+        let tall = ui.ctx().content_rect().height();
+        let glance = Glance { aptitudes: full.is_some(), stats: full.is_some() && tall >= 760.0 };
         ui.horizontal_top(|ui| {
             match (full, self.art_uri("umas", outfit)) {
                 (Some(uri), _) => {
                     let h = 400.0 * art;
-                    let (rect, _) = ui.allocate_exact_size(vec2(h * 0.75 * 0.52, h), egui::Sense::hover());
+                    // Her box takes the render's own shape (768×1024 for all of them today), cut to
+                    // the middle half, so she's never stretched whatever the window.
+                    let crop = egui::Rect::from_min_max(egui::pos2(0.24, 0.05), egui::pos2(0.76, 0.97));
+                    let image = egui::Image::new(uri);
+                    let px = image.load_for_size(ui.ctx(), vec2(768.0, 1024.0)).ok().and_then(|t| t.size()).unwrap_or(vec2(768.0, 1024.0));
+                    let aspect = (px.x * crop.width()) / (px.y * crop.height());
+                    let (rect, _) = ui.allocate_exact_size(vec2(h * aspect, h), egui::Sense::hover());
                     // A soft floor shadow under her feet: three stacked ellipses fake a soft edge.
                     let floor = rect.center_bottom() - vec2(0.0, h * 0.045);
                     let dark = ui.visuals().dark_mode;
@@ -218,7 +240,7 @@ impl App {
                         let a = if dark { a * 2 } else { a / 2 };
                         ui.painter().add(egui::Shape::ellipse_filled(floor, vec2(rect.width() * 0.36 * k, h * 0.02 * k), egui::Color32::from_black_alpha(a)));
                     }
-                    egui::Image::new(uri).uv(egui::Rect::from_min_max(egui::pos2(0.24, 0.05), egui::pos2(0.76, 0.97))).paint_at(ui, rect);
+                    crate::ui_util::paint_cover(ui, image, rect, crop);
                 }
                 (None, Some(uri)) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(s, s)).corner_radius(CornerRadius::same((s / 2.0) as u8))),
                 (None, None) => _ = ui.allocate_exact_size(vec2(s, s), egui::Sense::hover()),
@@ -245,20 +267,22 @@ impl App {
                     let when = if i.release == crate::knowledge::GLOBAL_LAUNCH { "On Global since launch".to_string() } else { format!("On Global since {}", i.release) };
                     ui.label(RichText::new(when).size(size::SM).color(p.weak));
                     // Beside her full-body art, her grades and stats at a glance.
-                    if wide {
+                    if glance.aptitudes {
                         ui.add_space(10.0);
                         crate::tab_umas::aptitude_rows(ui, &i);
+                    }
+                    if glance.stats {
                         ui.add_space(6.0);
                         crate::tab_umas::stats_grid(ui, &i);
                     }
                 }
             });
         });
-        wide
+        glance
     }
 
     /// The uma pop-up's body: her finished umas, her support cards, then Collection's sections.
-    fn uma_body(&mut self, ui: &mut egui::Ui, outfit: u32, finished: &[Finished], glance: bool) {
+    fn uma_body(&mut self, ui: &mut egui::Ui, outfit: u32, finished: &[Finished], glance: Glance) {
         let p = pal(ui);
         let potential = self.roster.umas.iter().find(|u| u.id == outfit).map(|u| u.potential);
         crate::ui_util::card_explained(ui, "Your finished umas of her", "Careers of her you've finished: the parents you can breed from. Import them in Settings → Profile.", |ui| {
@@ -295,7 +319,7 @@ impl App {
                 });
             });
         }
-        self.uma_sections(ui, outfit, potential, glance);
+        self.uma_sections(ui, outfit, potential, !glance.aptitudes, !glance.stats);
     }
 
     /// The buttons under the pop-up; true when one of them leaves it.

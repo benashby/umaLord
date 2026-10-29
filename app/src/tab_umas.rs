@@ -513,7 +513,7 @@ impl App {
         if ui.is_rect_visible(rect) {
             let p = ui.painter();
             match self.art_uri("umas", uma.id) {
-                Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(10)).paint_at(ui, img),
+                Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(10)), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                 None => placeholder(p, img, Color32::from_gray(70), &uma.name),
             }
             potential_badge(p, img.right_bottom() - vec2(4.0, 4.0), uma.potential);
@@ -778,7 +778,7 @@ impl App {
             ui.label(RichText::new("No knowledge data for this outfit yet. Rebuild knowledge/data.").color(pal(ui).warn));
             return;
         }
-        self.uma_sections(ui, uma.id, Some(uma.potential), true);
+        self.uma_sections(ui, uma.id, Some(uma.potential), true, true);
 
         let outfits: Vec<&Uma> = self.roster.umas.iter().filter(|u| u.name == uma.name && u.id != uma.id).collect();
         let own_cards: Vec<_> = self.roster.cards.iter().filter(|c| c.uma == uma.name).collect();
@@ -802,16 +802,18 @@ impl App {
         ui.add_space(10.0);
     }
 
-    /// Everything known about an outfit, below its header: aptitudes and stats (unless the header
-    /// already shows them: `glance` false), skills (locked above `potential` when she's owned),
+    /// Everything known about an outfit, below its header: aptitudes and stats (each unless the
+    /// header already shows it), skills (locked above `potential` when she's owned),
     /// evolutions, objectives and events. Collection's detail panel and the detail pop-up both
     /// draw it.
-    pub(crate) fn uma_sections(&mut self, ui: &mut egui::Ui, id: u32, potential: Option<u8>, glance: bool) {
+    pub(crate) fn uma_sections(&mut self, ui: &mut egui::Ui, id: u32, potential: Option<u8>, aptitudes: bool, stats: bool) {
         let p = pal(ui);
         let Some(info) = self.kb.umas.get(&id).cloned() else { return };
 
-        if glance {
+        if aptitudes {
             card_explained(ui, "Aptitudes", "S and A are ideal. Below A she runs slower there, unless parents' pink sparks raise the grade.", |ui| aptitude_rows(ui, &info));
+        }
+        if stats {
             card_explained(ui, "Stats", "Base: her starting stats. Growth: a bonus to what training adds to that stat.", |ui| stats_grid(ui, &info));
         }
 

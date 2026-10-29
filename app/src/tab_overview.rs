@@ -468,7 +468,7 @@ impl App {
                     ui.painter().rect_filled(rect, CornerRadius::same(8), p.hover);
                 }
                 if let Some(uri) = self.art_uri("umas", *id) {
-                    egui::Image::new(uri).corner_radius(CornerRadius::same(8)).paint_at(ui, img);
+                    crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(8)), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)));
                 }
                 let star = if meta_ids.contains(id) { "★ " } else { "" };
                 ui.painter().text(pos2(rect.center().x, img.bottom() + 11.0), Align2::CENTER_CENTER, format!("{star}{}", crate::ui_util::truncate(&info.name, 12)), FontId::proportional(12.0), p.text);
@@ -688,7 +688,7 @@ impl App {
             for u in below.iter().take(5) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::click());
                 if let Some(uri) = self.art_uri("umas", u.id) {
-                    egui::Image::new(uri).corner_radius(CornerRadius::same(8)).paint_at(ui, rect);
+                    crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(8)), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)));
                 }
                 crate::ui_util::potential_badge(ui.painter(), rect.right_bottom(), u.potential);
                 if resp.on_hover_text(format!("{} {}★ P{} · click for details", u.display_name(), u.stars, u.potential)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -861,7 +861,7 @@ impl App {
                     ui.painter().add(egui::Shadow { offset: [0, 3], blur: 10, spread: 0, color: Color32::from_black_alpha(60) }.as_shape(img, CornerRadius::same(6)));
                 }
                 match self.art_uri("cards", *id) {
-                    Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(6)).paint_at(ui, img),
+                    Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(6)), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                     None => crate::ui_util::placeholder(ui.painter(), img, crate::ui_util::type_color_str(&info.kind), &info.uma),
                 }
                 ui.painter().text(pos2(img.center().x, img.bottom() + 9.0), Align2::CENTER_CENTER, caption, FontId::proportional(10.5), p.weak);

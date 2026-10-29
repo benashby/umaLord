@@ -1300,7 +1300,7 @@ impl App {
                     if !enabled {
                         image = image.tint(Color32::from_white_alpha(70));
                     }
-                    image.paint_at(ui, img);
+                    crate::ui_util::paint_cover(ui, image, img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)));
                 }
                 None => {
                     ui.painter().rect_filled(img, CornerRadius::same(8), p.raised);

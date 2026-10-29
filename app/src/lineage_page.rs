@@ -801,7 +801,7 @@ impl App {
                 ui.painter().circle_filled(rect.center(), size / 2.0 + 3.0, p.accent.gamma_multiply(0.35));
             }
             match self.art_uri("umas", outfit) {
-                Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same((size / 2.0) as u8)).paint_at(ui, rect),
+                Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same((size / 2.0) as u8)), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
                 None => {
                     ui.painter().circle_filled(rect.center(), size / 2.0, p.hover);
                     let name = crate::parentage::uma_name(&self.kb, outfit);
@@ -826,7 +826,7 @@ impl App {
                 ui.painter().rect_filled(rect.expand(3.0), 6.0, p.accent.gamma_multiply(0.35));
             }
             match self.art_uri("cards", id) {
-                Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(4)).paint_at(ui, rect),
+                Some(uri) => crate::ui_util::paint_cover(ui, egui::Image::new(uri).corner_radius(CornerRadius::same(4)), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                 None => _ = ui.painter().rect_filled(rect, 4.0, p.hover),
             }
             if borrowed {
