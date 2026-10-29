@@ -16,6 +16,10 @@ use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, 
 const WIDE: f32 = 1200.0;
 const ACTION_W: f32 = 480.0;
 const PANE_GAP: f32 = 24.0;
+/// The overview pane's content stops here; past it the extra width goes to the action pane
+/// (the card the player works from), up to `ACTION_MAX`.
+const RIGHT_CAP: f32 = 1240.0;
+const ACTION_MAX: f32 = 1200.0;
 /// Prose stops at about 80 characters a line (WCAG 1.4.8).
 pub(crate) const PROSE_W: f32 = 580.0;
 
@@ -112,7 +116,17 @@ impl App {
     /// of the page (One runner, where the step is the main content and the overview is short).
     pub(crate) fn panes_with(&mut self, ui: &mut egui::Ui, action_w: f32, head: impl FnOnce(&mut Self, &mut egui::Ui), action: impl FnOnce(&mut Self, &mut egui::Ui), overview: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let wide = ui.available_width() >= WIDE;
-        let action_w = if action_w <= 1.0 { (ui.available_width() - PANE_GAP) * action_w } else { action_w };
+        let full = ui.available_width();
+        let action_w = if action_w <= 1.0 {
+            (full - PANE_GAP) * action_w
+        } else {
+            // The card is the detail the player works from, the overview the list they glance at
+            // (list-detail layouts): the card takes 40% and every pixel past the overview's cap,
+            // between 480 and 1,200; a width dragged by hand wins, until double-clicked away.
+            let auto = (full * 0.40).max(full - RIGHT_CAP - PANE_GAP).clamp(action_w, ACTION_MAX);
+            let dragged: Option<f32> = crate::collection_kit::setting::<Option<f32>>(ui.ctx(), "lineage_split");
+            dragged.map_or(auto, |d| d.clamp(action_w, (full - 600.0).max(action_w)))
+        };
         head(self, ui);
         ui.add_space(8.0);
         if wide {
@@ -128,7 +142,19 @@ impl App {
                     }
                     sa.show(ui, |ui| action(self, ui));
                 });
-                ui.add_space(PANE_GAP);
+                // The gap is a handle: drag to resize, double-click to go back to automatic.
+                let (gap, resp) = ui.allocate_exact_size(vec2(PANE_GAP, h), Sense::click_and_drag());
+                let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeHorizontal).on_hover_text("Drag to resize; double-click to reset");
+                if resp.hovered() || resp.dragged() {
+                    ui.painter().line_segment([pos2(gap.center().x, gap.top() + 4.0), pos2(gap.center().x, gap.bottom() - 4.0)], Stroke::new(2.0, pal(ui).accent.gamma_multiply(0.6)));
+                }
+                if resp.dragged() {
+                    let w = (action_w + resp.drag_delta().x).clamp(320.0, (full - 600.0).max(320.0));
+                    crate::collection_kit::set_setting(ui.ctx(), "lineage_split", Some(w));
+                }
+                if resp.double_clicked() {
+                    crate::collection_kit::set_setting(ui.ctx(), "lineage_split", None::<f32>);
+                }
                 let rest = ui.available_width();
                 ui.allocate_ui_with_layout(vec2(rest, h), egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_width(rest);
@@ -138,7 +164,10 @@ impl App {
                     if let Some(y) = std::env::var("UMALORD_SCROLL_OVERVIEW").ok().and_then(|v| v.parse::<f32>().ok()) {
                         sa = sa.vertical_scroll_offset(y);
                     }
-                    sa.show(ui, |ui| overview(self, ui));
+                    sa.show(ui, |ui| {
+                        ui.set_max_width(RIGHT_CAP.min(rest));
+                        overview(self, ui)
+                    });
                 });
             });
         } else {
@@ -340,7 +369,8 @@ impl App {
     pub(crate) fn career_card(&mut self, ui: &mut egui::Ui, b: &Brief, head: Option<&crate::lineage_steps::StepHead>) {
         let p = pal(ui);
         let it = b.mode != "Manual career";
-        let wide = ui.available_width() >= 1100.0;
+        // Two columns once the card is wide enough for two 360 px columns: setup, then the run.
+        let wide = ui.available_width() >= 760.0;
         egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.5, p.accent)).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let mut shop = false;
@@ -550,9 +580,21 @@ impl App {
                 }
             };
             if wide {
-                ui.columns(2, |cols| {
-                    cols[0].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| left(self, ui));
-                    cols[1].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| right(self, ui));
+                // Two fixed columns (egui's `columns` let one column's content push into the other).
+                let w = ui.available_width();
+                let colw = ((w - 24.0) / 2.0).max(300.0);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(vec2(colw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_width(colw);
+                        ui.set_max_width(colw);
+                        left(self, ui)
+                    });
+                    ui.add_space(24.0 - ui.spacing().item_spacing.x);
+                    ui.allocate_ui_with_layout(vec2(colw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_width(colw);
+                        ui.set_max_width(colw);
+                        right(self, ui)
+                    });
                 });
             } else {
                 left(self, ui);

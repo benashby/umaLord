@@ -429,7 +429,11 @@ impl App {
                             painter.circle(center, 12.0, p.surface, Stroke::new(1.5, p.weak.gamma_multiply(0.6)));
                             painter.text(center, Align2::CENTER_CENTER, (i + 1).to_string(), FontId::proportional(13.0), p.weak);
                         }
-                        let flex = (ui.available_width() - cols[1] - cols[2] - cols[3] - 3.0 * ui.spacing().item_spacing.x).max(160.0);
+                        // In a narrow pane the race moves under the reason; the reason stops at about
+                        // 75 characters, with the race and gain right after it, not at the far edge.
+                        let compact = ui.available_width() < 840.0;
+                        let others = if compact { cols[1] + cols[3] + 2.0 * ui.spacing().item_spacing.x } else { cols[1] + cols[2] + cols[3] + 3.0 * ui.spacing().item_spacing.x };
+                        let flex = (ui.available_width() - others).clamp(160.0, 600.0);
                         // Col 2: who, her status and the kind of career.
                         ui.allocate_ui_with_layout(vec2(cols[1], 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.set_width(cols[1]);
@@ -480,12 +484,17 @@ impl App {
                                     rich(ui, &[Span::t(&format!("{} · ", crate::lineage_page::capitalize(&usual))).colored(p.weak), how.colored(p.weak)], 12.5, flex);
                                 }
                             }
+                            if compact {
+                                self.step_helps(ui, plan, c);
+                            }
                         });
                         // Col 4: what it helps.
-                        ui.allocate_ui_with_layout(vec2(cols[2], 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.set_width(cols[2]);
-                            self.step_helps(ui, plan, c);
-                        });
+                        if !compact {
+                            ui.allocate_ui_with_layout(vec2(cols[2], 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.set_width(cols[2]);
+                                self.step_helps(ui, plan, c);
+                            });
+                        }
                         // Col 5: Show how.
                         ui.allocate_ui_with_layout(vec2(cols[3], 0.0), egui::Layout::right_to_left(egui::Align::Min), |ui| {
                             ui.set_width(cols[3]);
@@ -871,7 +880,8 @@ impl App {
                 }
             });
             let action_w = if wide { cols[2] } else { 0.0 };
-            let text_w = (ui.available_width() - action_w - ui.spacing().item_spacing.x).max(200.0);
+            // About 75 characters, with the action right after the text.
+            let text_w = (ui.available_width() - action_w - ui.spacing().item_spacing.x).clamp(200.0, 640.0);
             ui.allocate_ui_with_layout(vec2(text_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(text_w);
                 let (kicker, title, why) = match l {
