@@ -305,6 +305,20 @@ impl App {
 
     /// A view with no saved plan: the build log while one is being made, else the empty state.
     fn plan_alone(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
+        // The same header a saved plan has, so the card sits the same distance below the bar.
+        let p = pal(ui);
+        ui.horizontal_wrapped(|ui| {
+            if ui.link(RichText::new("Overview").size(12.5)).clicked() {
+                self.lineage.view = LineageView::Overview;
+            }
+            ui.label(RichText::new("›").size(12.5).color(p.weak));
+            let title = match which {
+                crate::parentage::saved::Which::Cm(id) => self.kb.upcoming_cms(&crate::ui_util::today()).into_iter().find(|e| e.id == id).map_or(format!("CM {id}"), |e| format!("CM {} {} team", e.id, e.name)),
+                crate::parentage::saved::Which::Tt => "Team Trials".to_string(),
+            };
+            ui.label(semibold(title, size::LG));
+        });
+        ui.add_space(8.0);
         egui::ScrollArea::vertical().id_salt("lineage_alone").auto_shrink([false, false]).show(ui, |ui| {
             if self.plan_building(which) {
                 self.build_log(ui, which);
