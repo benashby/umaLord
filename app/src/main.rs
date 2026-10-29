@@ -721,6 +721,8 @@ pub(crate) struct App {
     pub kb: Knowledge,
     pub card_art: HashSet<u32>,
     pub uma_art: HashSet<u32>,
+    /// Full-body renders downloaded so far (app/assets/umas-full).
+    pub full_art: HashSet<u32>,
     pub tab: Tab,
     pub collection_tab: CollectionTab,
     pub career_tab: CareerTab,
@@ -861,6 +863,7 @@ impl App {
             sim_error,
             card_art: scan_art(root.as_deref(), "cards"),
             uma_art: scan_art(root.as_deref(), "umas"),
+            full_art: scan_art(root.as_deref(), "umas-full"),
             kb: Knowledge::load(root.as_deref()),
             ask: ask::AskState::new(root.as_deref()),
             agent: Default::default(),
@@ -1157,6 +1160,7 @@ impl App {
         (self.sim_data, self.sim_error) = load_sim(self.root.as_deref());
         self.card_art = scan_art(self.root.as_deref(), "cards");
         self.uma_art = scan_art(self.root.as_deref(), "umas");
+        self.full_art = scan_art(self.root.as_deref(), "umas-full");
         self.planner.refresh_files(self.root.as_deref());
         self.planner.key_memo.set(None);
         self.planner.parent_sparks.replace(None);
@@ -1167,11 +1171,16 @@ impl App {
     }
 
     pub fn art_uri(&self, sub: &str, id: u32) -> Option<String> {
-        let set = if sub == "cards" { &self.card_art } else { &self.uma_art };
+        let set = match sub {
+            "cards" => &self.card_art,
+            "umas-full" => &self.full_art,
+            _ => &self.uma_art,
+        };
         if !set.contains(&id) {
             return None;
         }
-        let path = self.root.as_ref()?.join("app").join("assets").join(sub).join(format!("{id}.webp"));
+        let ext = if sub == "umas-full" { "png" } else { "webp" };
+        let path = self.root.as_ref()?.join("app").join("assets").join(sub).join(format!("{id}.{ext}"));
         // file:///C:/… on Windows, file:///home/… elsewhere; a folder given as `.` must not
         // become file:///./….
         let path = std::path::absolute(&path).unwrap_or(path).to_string_lossy().replace('\\', "/");

@@ -778,7 +778,7 @@ impl App {
             ui.label(RichText::new("No knowledge data for this outfit yet. Rebuild knowledge/data.").color(pal(ui).warn));
             return;
         }
-        self.uma_sections(ui, uma.id, Some(uma.potential));
+        self.uma_sections(ui, uma.id, Some(uma.potential), true);
 
         let outfits: Vec<&Uma> = self.roster.umas.iter().filter(|u| u.name == uma.name && u.id != uma.id).collect();
         let own_cards: Vec<_> = self.roster.cards.iter().filter(|c| c.uma == uma.name).collect();
@@ -802,53 +802,18 @@ impl App {
         ui.add_space(10.0);
     }
 
-    /// Everything known about an outfit, below its header: aptitudes, stats, skills (locked above
-    /// `potential` when she's owned), evolutions, objectives and events. Collection's detail panel
-    /// and the detail pop-up both draw it.
-    pub(crate) fn uma_sections(&mut self, ui: &mut egui::Ui, id: u32, potential: Option<u8>) {
+    /// Everything known about an outfit, below its header: aptitudes and stats (unless the header
+    /// already shows them: `glance` false), skills (locked above `potential` when she's owned),
+    /// evolutions, objectives and events. Collection's detail panel and the detail pop-up both
+    /// draw it.
+    pub(crate) fn uma_sections(&mut self, ui: &mut egui::Ui, id: u32, potential: Option<u8>, glance: bool) {
         let p = pal(ui);
         let Some(info) = self.kb.umas.get(&id).cloned() else { return };
 
-        card_explained(ui, "Aptitudes", "S and A are ideal. Below A she runs slower there, unless parents' pink sparks raise the grade.", |ui| {
-            let a = &info.aptitude;
-            let rows: [(&str, Vec<(&str, &str)>); 3] = [
-                ("Track", vec![("Turf", &a.turf), ("Dirt", &a.dirt)]),
-                ("Distance", vec![("Sprint", &a.sprint), ("Mile", &a.mile), ("Medium", &a.medium), ("Long", &a.long)]),
-                ("Style", vec![("Front", &a.front), ("Pace", &a.pace), ("Late", &a.late), ("End", &a.end)]),
-            ];
-            for (title, cells) in rows {
-                ui.horizontal(|ui| {
-                    ui.add_sized([70.0, 40.0], egui::Label::new(RichText::new(title).color(p.weak)));
-                    for (label, g) in cells {
-                        grade_badge(ui, label, g);
-                    }
-                });
-            }
-        });
-
-        card_explained(ui, "Stats", "Base: her starting stats. Growth: a bonus to what training adds to that stat.", |ui| {
-            egui::Grid::new("uma_stats").num_columns(6).spacing([16.0, 6.0]).show(ui, |ui| {
-                ui.label("");
-                for h in ["Speed", "Stamina", "Power", "Guts", "Wit"] {
-                    ui.label(RichText::new(h).color(p.weak));
-                }
-                ui.end_row();
-                ui.label(RichText::new("Base").color(p.weak));
-                for v in info.base {
-                    ui.label(semibold(v.to_string(), 15.0));
-                }
-                ui.end_row();
-                ui.label(RichText::new("Growth").color(p.weak));
-                for v in info.growth {
-                    if v == 0 {
-                        ui.label(RichText::new("·").color(p.weak));
-                    } else {
-                        ui.label(semibold(format!("+{v}%"), 14.0).color(p.gold));
-                    }
-                }
-                ui.end_row();
-            });
-        });
+        if glance {
+            card_explained(ui, "Aptitudes", "S and A are ideal. Below A she runs slower there, unless parents' pink sparks raise the grade.", |ui| aptitude_rows(ui, &info));
+            card_explained(ui, "Stats", "Base: her starting stats. Growth: a bonus to what training adds to that stat.", |ui| stats_grid(ui, &info));
+        }
 
         card_explained(ui, "Skills", "Click a skill to see what it does. Potential skills above her current potential are locked.", |ui| {
             if let Some(u) = info.unique_skill {
@@ -930,6 +895,50 @@ impl App {
         }
 
     }
+}
+
+/// Her ten aptitude grades in three rows: track, distance, style.
+pub(crate) fn aptitude_rows(ui: &mut egui::Ui, info: &crate::knowledge::UmaInfo) {
+    let p = pal(ui);
+    let a = &info.aptitude;
+    let rows: [(&str, Vec<(&str, &str)>); 3] = [
+        ("Track", vec![("Turf", &a.turf), ("Dirt", &a.dirt)]),
+        ("Distance", vec![("Sprint", &a.sprint), ("Mile", &a.mile), ("Medium", &a.medium), ("Long", &a.long)]),
+        ("Style", vec![("Front", &a.front), ("Pace", &a.pace), ("Late", &a.late), ("End", &a.end)]),
+    ];
+    for (title, cells) in rows {
+        ui.horizontal(|ui| {
+            ui.add_sized([70.0, 40.0], egui::Label::new(RichText::new(title).color(p.weak)));
+            for (label, g) in cells {
+                grade_badge(ui, label, g);
+            }
+        });
+    }
+}
+
+/// Her base stats and growth bonuses, a row each, in the same 52 px columns as the aptitude
+/// grades above them.
+pub(crate) fn stats_grid(ui: &mut egui::Ui, info: &crate::knowledge::UmaInfo) {
+    let p = pal(ui);
+    let cell = |ui: &mut egui::Ui, text: RichText| {
+        ui.allocate_ui_with_layout(vec2(52.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(52.0);
+            ui.label(text);
+        });
+    };
+    let row = |ui: &mut egui::Ui, title: &str, hover: &str, cells: Vec<RichText>| {
+        ui.horizontal(|ui| {
+            ui.add_sized([70.0, 22.0], egui::Label::new(RichText::new(title).color(p.weak))).on_hover_text(hover);
+            for c in cells {
+                cell(ui, c);
+            }
+        });
+    };
+    let heads = ["Speed", "Stamina", "Power", "Guts", "Wit"].map(|h| RichText::new(h).size(11.5).color(p.weak)).to_vec();
+    row(ui, "", "", heads);
+    row(ui, "Base", "Her stats at the start of a career.", info.base.iter().map(|v| semibold(v.to_string(), 15.0)).collect());
+    let growth = info.growth.iter().map(|v| if *v == 0 { RichText::new("–").color(p.weak) } else { semibold(format!("+{v}%"), 14.0).color(p.gold) }).collect();
+    row(ui, "Growth", "A bonus to what training adds to that stat.", growth);
 }
 
 fn title_case(s: &str) -> String {

@@ -129,19 +129,29 @@ pub(crate) struct AddCard {
     pub owned_only: bool,
 }
 
-/// Which art: a support card's, or an uma outfit's icon.
+/// Which art: a support card's, an uma outfit's icon, or her full-body render (the detail
+/// pop-up's, fetched when one opens).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Art {
     Card,
     Uma,
+    Full,
 }
 
 impl Art {
-    /// Its folder under app/assets, and where uma.guide serves it.
+    /// Its folder under app/assets, its file type, and where it's served.
     pub(crate) fn dir(self) -> &'static str {
         match self {
             Art::Card => "cards",
             Art::Uma => "umas",
+            Art::Full => "umas-full",
+        }
+    }
+
+    pub(crate) fn ext(self) -> (&'static str, image::ImageFormat) {
+        match self {
+            Art::Full => ("png", image::ImageFormat::Png),
+            _ => ("webp", image::ImageFormat::WebP),
         }
     }
 
@@ -150,6 +160,9 @@ impl Art {
             Art::Card => format!("https://uma.guide/img/card/composite/tex_support_card_{id}_thumb.webp"),
             // The character id is the outfit id's first four digits: 100101 is chr_icon_1001_100101.
             Art::Uma => format!("https://uma.guide/icon/uma/chr_icon_{}_{id}_01.webp", id / 100),
+            // GameTora's trainee render: the outfit's 3D model standing, 768×1024 on transparency
+            // (all 109 Global outfits there, checked 2026-10-29).
+            Art::Full => format!("https://media.gametora.com/umamusume/characters/render/trainee/idle/{id}.png"),
         }
     }
 }
@@ -1296,6 +1309,7 @@ impl App {
             let have = match kind {
                 Art::Card => self.card_art.contains(&id),
                 Art::Uma => self.uma_art.contains(&id),
+                Art::Full => self.full_art.contains(&id),
             };
             if !have && self.cards.art.seen.insert((kind, id)) {
                 self.cards.art.pending.push_back((kind, id));
@@ -1337,6 +1351,7 @@ impl App {
                 match kind {
                     Art::Card => self.card_art.insert(id),
                     Art::Uma => self.uma_art.insert(id),
+                    Art::Full => self.full_art.insert(id),
                 };
             } else if kind == Art::Card && self.cards.art.watch == Some(id) {
                 self.toast("Saved, but the card art couldn't be downloaded; it shows as a placeholder.", crate::ui_util::ToastKind::Error);
@@ -1353,13 +1368,14 @@ impl App {
             let ctx = ctx.clone();
             std::thread::spawn(move || {
                 let _ = std::fs::create_dir_all(&dir);
-                let path = dir.join(format!("{id}.webp"));
-                let part = dir.join(format!("{id}.webp.part"));
+                let (ext, format) = kind.ext();
+                let path = dir.join(format!("{id}.{ext}"));
+                let part = dir.join(format!("{id}.{ext}.part"));
                 let mut cmd = std::process::Command::new(crate::ask::CURL);
                 cmd.args(["-sSfL", "--max-time", "60", "-o"]).arg(&part).arg(kind.url(id));
                 crate::ask::hidden(&mut cmd);
                 let ok = cmd.status().is_ok_and(|s| s.success())
-                    && std::fs::read(&part).ok().is_some_and(|b| image::load_from_memory_with_format(&b, image::ImageFormat::WebP).is_ok())
+                    && std::fs::read(&part).ok().is_some_and(|b| image::load_from_memory_with_format(&b, format).is_ok())
                     && std::fs::rename(&part, &path).is_ok();
                 if !ok {
                     let _ = std::fs::remove_file(&part);

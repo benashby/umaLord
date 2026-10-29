@@ -49,7 +49,10 @@ impl App {
             return;
         }
         let finished = match what {
-            Detail::Uma(outfit) => self.finished_of(outfit),
+            Detail::Uma(outfit) => {
+                self.queue_art_of(crate::tab_cards::Art::Full, [outfit]);
+                self.finished_of(outfit)
+            }
             Detail::Card(_) => Vec::new(),
         };
         self.details.push(Open { what, context, finished });
@@ -93,6 +96,7 @@ impl App {
         let art = if screen.height() < 700.0 { 0.5 } else if screen.width() >= 1200.0 { 1.0 } else { 0.75 };
         let mut close = false;
         let mut back = false;
+        let mut glanced = false;
         let modal = egui::Modal::new(egui::Id::unique("detail_modal"))
             .backdrop_color(egui::Color32::from_black_alpha(200))
             .frame(egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18)).corner_radius(CornerRadius::same(14)).stroke(egui::Stroke::new(1.0, crate::theme::palette(ctx.global_style().visuals.dark_mode).border)))
@@ -116,7 +120,7 @@ impl App {
                 }
                 match open.what {
                     Detail::Card(id) => self.card_head(ui, id, art),
-                    Detail::Uma(outfit) => self.uma_head(ui, outfit, art),
+                    Detail::Uma(outfit) => glanced = self.uma_head(ui, outfit, art),
                 }
                 if let Some(c) = &open.context {
                     ui.add_space(10.0);
@@ -133,7 +137,7 @@ impl App {
                         let level = self.roster.cards.iter().find(|c| c.id == id).map(|c| u32::from(c.level));
                         self.card_sections(ui, id, level);
                     }
-                    Detail::Uma(outfit) => self.uma_body(ui, outfit, &open.finished),
+                    Detail::Uma(outfit) => self.uma_body(ui, outfit, &open.finished, !glanced),
                 });
                 ui.separator();
                 if self.detail_footer(ui, open.what) {
@@ -192,16 +196,32 @@ impl App {
         });
     }
 
-    fn uma_head(&mut self, ui: &mut egui::Ui, outfit: u32, art: f32) {
+    fn uma_head(&mut self, ui: &mut egui::Ui, outfit: u32, art: f32) -> bool {
         let p = pal(ui);
         let full = crate::parentage::uma_name(&self.kb, outfit);
         let (name, title) = full.split_once(" [").map_or((full.clone(), String::new()), |(n, t)| (n.to_string(), format!("[{t}")));
         let owned = self.roster.umas.iter().find(|u| u.id == outfit).cloned();
         let s = (160.0 * art).max(80.0);
+        // Her full-body render once it's downloaded (a short window keeps the round icon, so the
+        // body has room); the render's sides are empty, so only its middle half is drawn.
+        let full = self.art_uri("umas-full", outfit).filter(|_| art >= 0.75);
+        let wide = full.is_some();
         ui.horizontal_top(|ui| {
-            match self.art_uri("umas", outfit) {
-                Some(uri) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(s, s)).corner_radius(CornerRadius::same((s / 2.0) as u8))),
-                None => _ = ui.allocate_exact_size(vec2(s, s), egui::Sense::hover()),
+            match (full, self.art_uri("umas", outfit)) {
+                (Some(uri), _) => {
+                    let h = 400.0 * art;
+                    let (rect, _) = ui.allocate_exact_size(vec2(h * 0.75 * 0.52, h), egui::Sense::hover());
+                    // A soft floor shadow under her feet: three stacked ellipses fake a soft edge.
+                    let floor = rect.center_bottom() - vec2(0.0, h * 0.045);
+                    let dark = ui.visuals().dark_mode;
+                    for (k, a) in [(1.0, 30), (0.75, 30), (0.5, 35)] {
+                        let a = if dark { a * 2 } else { a / 2 };
+                        ui.painter().add(egui::Shape::ellipse_filled(floor, vec2(rect.width() * 0.36 * k, h * 0.02 * k), egui::Color32::from_black_alpha(a)));
+                    }
+                    egui::Image::new(uri).uv(egui::Rect::from_min_max(egui::pos2(0.24, 0.05), egui::pos2(0.76, 0.97))).paint_at(ui, rect);
+                }
+                (None, Some(uri)) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(s, s)).corner_radius(CornerRadius::same((s / 2.0) as u8))),
+                (None, None) => _ = ui.allocate_exact_size(vec2(s, s), egui::Sense::hover()),
             }
             ui.add_space(8.0);
             ui.vertical(|ui| {
@@ -221,16 +241,24 @@ impl App {
                     None => _ = badge(ui, "Not in your collection", p.weak),
                 }
                 ui.add_space(4.0);
-                if let Some(i) = self.kb.umas.get(&outfit) {
+                if let Some(i) = self.kb.umas.get(&outfit).cloned() {
                     let when = if i.release == crate::knowledge::GLOBAL_LAUNCH { "On Global since launch".to_string() } else { format!("On Global since {}", i.release) };
                     ui.label(RichText::new(when).size(size::SM).color(p.weak));
+                    // Beside her full-body art, her grades and stats at a glance.
+                    if wide {
+                        ui.add_space(10.0);
+                        crate::tab_umas::aptitude_rows(ui, &i);
+                        ui.add_space(6.0);
+                        crate::tab_umas::stats_grid(ui, &i);
+                    }
                 }
             });
         });
+        wide
     }
 
     /// The uma pop-up's body: her finished umas, her support cards, then Collection's sections.
-    fn uma_body(&mut self, ui: &mut egui::Ui, outfit: u32, finished: &[Finished]) {
+    fn uma_body(&mut self, ui: &mut egui::Ui, outfit: u32, finished: &[Finished], glance: bool) {
         let p = pal(ui);
         let potential = self.roster.umas.iter().find(|u| u.id == outfit).map(|u| u.potential);
         crate::ui_util::card_explained(ui, "Your finished umas of her", "Careers of her you've finished: the parents you can breed from. Import them in Settings → Profile.", |ui| {
@@ -267,7 +295,7 @@ impl App {
                 });
             });
         }
-        self.uma_sections(ui, outfit, potential);
+        self.uma_sections(ui, outfit, potential, glance);
     }
 
     /// The buttons under the pop-up; true when one of them leaves it.
