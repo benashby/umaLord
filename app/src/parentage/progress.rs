@@ -34,19 +34,19 @@ pub const CM_STAGES: [&str; 8] = [
     "Racing the runners head to head",
     "Comparing with today's team",
     "Ordering the parent careers",
-    "Writing each career's brief",
+    "Writing up each career",
     "Looking for ways to raise the ceiling",
 ];
 
 /// The stages a Team Trials build reports, in order.
 pub const TT_STAGES: [&str; 8] = [
     "Reading your account",
-    "Choosing candidates for each race",
-    "Racing each race's candidates",
-    "Picking each race's three",
+    "Finding who can run each race",
+    "Racing the candidates head to head",
+    "Picking three runners per race",
     "Planning parents",
     "Comparing with today's team",
-    "Writing each career's brief",
+    "Writing up each career",
     "Looking for ways to raise the ceiling",
 ];
 

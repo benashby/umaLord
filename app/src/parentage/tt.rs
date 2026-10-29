@@ -380,7 +380,7 @@ impl App {
         let data = self.sim_data.clone().ok_or("The simulator's data isn't loaded.")?;
         let mut notes = Vec::new();
         let meta = self.tt_meta();
-        self.stage("Choosing candidates for each race")?;
+        self.stage("Finding who can run each race")?;
         self.note(format!("The community's Team Trials picks (read {}) first, then your umas with A or B in each race.", meta.read));
         // Candidates per race: the meta's usual runners for it first (in its order), then A in
         // its surface and distance, then B (parents can lift a B). Her style is the meta's
@@ -414,7 +414,7 @@ impl App {
             self.note(format!("{name}: {}.", if names.is_empty() { "none of your umas can run it".to_string() } else { names.join(", ") }));
             cands.push(list.into_iter().take(6).map(|c| (c.0, c.1, c.2)).collect());
         }
-        self.stage("Racing each race's candidates")?;
+        self.stage("Racing the candidates head to head")?;
         // Build and race each race's candidates head to head; score each.
         let mut scored: Vec<Vec<Slot>> = Vec::new();
         for (row, list) in cands.iter().enumerate() {
@@ -470,7 +470,7 @@ impl App {
             scored.push(slots);
         }
         // Fill the races with the fewest candidates first; each character once in the team.
-        self.stage("Picking each race's three")?;
+        self.stage("Picking three runners per race")?;
         self.note("Races with the fewest candidates pick first; each character runs once in the team, and a new running style adds the positioning bonus.");
         let mut order: Vec<usize> = (0..ROWS.len()).collect();
         order.sort_by_key(|r| scored[*r].len());

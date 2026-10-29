@@ -521,7 +521,7 @@ impl App {
         ));
         let opts = TeamOpts { pin: choices.pin.clone(), exclude: choices.exclude.clone(), ..Default::default() };
         let team = self.cm_team(preset, &opts)?;
-        self.stage("Writing each career's brief")?;
+        self.stage("Writing up each career")?;
         let mut careers = Vec::new();
         let mut queue = Vec::new();
         for (k, (i, run)) in team.queue.iter().enumerate() {
@@ -587,7 +587,7 @@ impl App {
         let team = self.tt_team(200, &TtPins { pin: choices.tt_pin.clone(), exclude: choices.exclude.clone() })?;
         let vets = self.veterans();
         let meta = self.tt_meta();
-        self.stage("Writing each career's brief")?;
+        self.stage("Writing up each career")?;
         let mut careers: Vec<Career> = Vec::new();
         let first = self.tt_next(&team, &inv);
         // Where the first career sits: a replacement takes its slot's race, and the runner she
