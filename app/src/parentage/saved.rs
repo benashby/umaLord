@@ -722,22 +722,12 @@ impl App {
 /// a headline, then (after a newline) what the skill is, why it needs that parent, and how.
 fn inherit_text(kb: &Knowledge, meta: &super::tt::TtMeta, paired: bool) -> String {
     let parent = uma_name(kb, meta.inherit.uma);
-    let unique = kb.umas.get(&meta.inherit.uma).and_then(|u| u.unique_skill);
-    // The inherited copy of a unique is its 9xxxxx id, weaker than her own.
-    let does = unique.and_then(|u| kb.skills.get(&(u + 800_000))).map(|s| {
-        let first = s.desc.split(". ").next().unwrap_or(&s.desc).trim_end_matches('.');
-        format!(" Inherited, it does this: {}.", first.to_lowercase())
-    });
     let keep = if paired {
-        "The parent above is yours; with her, the race's surface, distance and style still start at A."
+        "Your parent above keeps the race's surface, distance and style at A."
     } else {
-        "None of your finished umas keeps her race's surface, distance and style at A beside her, so the other parent needs the pink sparks for them."
+        "The other parent needs the pink sparks for the race's surface, distance and style."
     };
-    format!(
-        "Why borrow {parent}: for {skill}\n{skill} is {parent}'s unique skill.{} Team Trials players give it to every runner: showing it and the gold skill it sets off both score points. A runner only gets another uma's unique by inheriting it from a parent, so one of her two parents must be {parent}, and you don't own her. {keep}",
-        does.unwrap_or_default(),
-        skill = meta.inherit.skill
-    )
+    format!("Why borrow {parent}: for her skill “{skill}”\nOnly a parent can pass on her unique skill, and you don't own her. {keep}", skill = meta.inherit.skill)
 }
 
 /// The ceiling stage's last line: what it found.
