@@ -794,9 +794,12 @@ impl App {
 
     /// An uma's round avatar, `size` across, with a thin ring; initials if the art is missing.
     pub(crate) fn avatar(&self, ui: &mut egui::Ui, outfit: u32, size: f32) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
         if ui.is_rect_visible(rect) {
             let p = pal(ui);
+            if resp.hovered() {
+                ui.painter().circle_filled(rect.center(), size / 2.0 + 3.0, p.accent.gamma_multiply(0.35));
+            }
             match self.art_uri("umas", outfit) {
                 Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same((size / 2.0) as u8)).paint_at(ui, rect),
                 None => {
@@ -808,14 +811,20 @@ impl App {
             }
             ui.painter().circle_stroke(rect.center(), size / 2.0, Stroke::new(1.0, p.border));
         }
-        resp.on_hover_text(crate::parentage::uma_name(&self.kb, outfit))
+        if resp.clicked() {
+            self.open_detail(crate::detail_modal::Detail::Uma(outfit), None);
+        }
+        resp.on_hover_text(format!("{} · click for details", crate::parentage::uma_name(&self.kb, outfit))).on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 
     /// A support card's art, `w` wide at 3:4; a borrowed card gets a dashed-look ring and an MLB tag.
     pub(crate) fn card_art(&self, ui: &mut egui::Ui, id: u32, w: f32, borrowed: bool) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(vec2(w, w * 4.0 / 3.0), if borrowed { Sense::click() } else { Sense::hover() });
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, w * 4.0 / 3.0), Sense::click());
         if ui.is_rect_visible(rect) {
             let p = pal(ui);
+            if resp.hovered() {
+                ui.painter().rect_filled(rect.expand(3.0), 6.0, p.accent.gamma_multiply(0.35));
+            }
             match self.art_uri("cards", id) {
                 Some(uri) => egui::Image::new(uri).corner_radius(CornerRadius::same(4)).paint_at(ui, rect),
                 None => _ = ui.painter().rect_filled(rect, 4.0, p.hover),
@@ -833,7 +842,14 @@ impl App {
             }
         }
         let name = self.kb.cards.get(&id).map_or(id.to_string(), |c| format!("{} [{}]", c.uma, c.title));
-        resp.on_hover_text(if borrowed { format!("Borrow: {name}, fully limit broken (MLB)") } else { name })
+        if resp.clicked() {
+            let why = borrowed.then(|| match self.roster.cards.iter().find(|c| c.id == id) {
+                Some(c) if !c.is_mlb() => format!("Borrow a friend's fully limit broken (MLB) copy for the friend slot: yours is only LB{}.", c.lb),
+                _ => "Borrow a friend's fully limit broken (MLB) copy for the friend slot.".to_string(),
+            });
+            self.open_detail(crate::detail_modal::Detail::Card(id), why);
+        }
+        resp.on_hover_text(format!("{} · click for details", if borrowed { format!("Borrow: {name}, fully limit broken (MLB)") } else { name })).on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 }
 

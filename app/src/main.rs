@@ -13,6 +13,7 @@ mod ask_opencode;
 mod career;
 mod data;
 mod datapack;
+mod detail_modal;
 mod charts;
 mod collection_kit;
 mod course_notes;
@@ -725,6 +726,9 @@ pub(crate) struct App {
     pub career_tab: CareerTab,
     pub view: View,
     pub jump: Cell<Option<Jump>>,
+    /// The detail pop-ups open, the top one shown (`detail_modal.rs`), and one asked for this frame.
+    pub details: Vec<crate::detail_modal::Open>,
+    pub detail_ask: std::cell::RefCell<Option<(crate::detail_modal::Detail, Option<String>)>>,
     /// Skills the account can get now; rebuilt after the roster changes.
     pub available_skills: std::cell::RefCell<Option<HashSet<u32>>>,
     /// The Help window is open.
@@ -871,6 +875,8 @@ impl App {
             career_tab: CareerTab::Plan,
             view: View::Grid,
             jump: Cell::new(None),
+            details: Vec::new(),
+            detail_ask: std::cell::RefCell::new(None),
             available_skills: std::cell::RefCell::new(None),
             help_open: false,
             mascot,
@@ -976,6 +982,21 @@ impl App {
                     app.onboarding.open = step.is_some();
                 }
                 Err(e) => eprintln!("{e}"),
+            }
+        }
+        // UMALORD_DETAIL=card:<id>|uma:<outfit>[,card:<id>…][;context]: open detail pop-ups (stacked).
+        if let Some(v) = env("UMALORD_DETAIL") {
+            let (list, context) = v.split_once(';').map_or((v.as_str(), None), |(l, c)| (l, Some(c.to_string())));
+            for item in list.split(',') {
+                let what = match item.split_once(':') {
+                    Some(("card", id)) => id.parse().ok().map(crate::detail_modal::Detail::Card),
+                    Some(("uma", id)) => id.parse().ok().map(crate::detail_modal::Detail::Uma),
+                    _ => None,
+                };
+                if let Some(w) = what {
+                    app.open_detail(w, context.clone());
+                    app.take_detail_ask(true);
+                }
             }
         }
         // UMALORD_ADD=<card id>: open the Cards tab's Add cards dialog with that card picked.
@@ -1217,7 +1238,12 @@ impl App {
     }
 
     fn apply_jump(&mut self) {
-        match self.jump.take() {
+        let jump = self.jump.take();
+        // A skill or card link inside a detail pop-up leaves it for Collection.
+        if jump.is_some() {
+            self.details.clear();
+        }
+        match jump {
             Some(Jump::Uma(id)) => {
                 self.tab = Tab::Collection;
                 self.collection_tab = CollectionTab::Umas;
@@ -1416,7 +1442,7 @@ impl App {
 
     /// Esc: close Help, an open dialog, or the selection's detail panel, in that order.
     fn close_topmost(&mut self) {
-        if self.settings.open || self.onboarding.paste.open {
+        if self.settings.open || self.onboarding.paste.open || !self.details.is_empty() {
             // Modals close themselves on Esc.
         } else if self.help_open {
             self.help_open = false;
@@ -1862,6 +1888,7 @@ impl App {
         }
         self.settings_window(&ctx);
         self.start_over_dialog(&ctx);
+        self.detail_modal(&ctx);
         self.apply_jump();
         // Background simulations finish even while another tab is open.
         if (self.tab, self.career_tab) != (Tab::Career, CareerTab::Race) {

@@ -1233,7 +1233,10 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if let Some(uri) = self.art_uri("umas", id) {
-                ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(84.0, 84.0)).corner_radius(CornerRadius::same(12)));
+                let art = egui::Image::new(uri).fit_to_exact_size(vec2(84.0, 84.0)).corner_radius(CornerRadius::same(12)).sense(egui::Sense::click());
+                if ui.add(art).on_hover_text("Click for her details").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    self.open_detail(crate::detail_modal::Detail::Uma(id), None);
+                }
             }
             ui.add_space(6.0);
             ui.vertical(|ui| {
@@ -1317,6 +1320,10 @@ impl App {
                 if enabled { p.text } else { p.weak },
             );
             tile_ring(ui, img, false, enabled && resp.hovered(), 10);
+        }
+        // A click picks; right-click opens the card's details.
+        if let Some(id) = id.filter(|_| resp.secondary_clicked()) {
+            self.open_detail(crate::detail_modal::Detail::Card(id), None);
         }
         resp
     }
