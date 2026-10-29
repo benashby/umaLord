@@ -62,6 +62,12 @@ pub struct Brief {
     /// Why the borrowed card, and the next best borrows if no friend has it MLB (card, why).
     pub friend_why: Option<String>,
     pub friend_alts: Vec<(u32, String)>,
+    /// A runner's own career: the Stamina she must reach (below it she runs dry).
+    #[serde(default)]
+    pub stat_floor: Option<u32>,
+    /// A parent career: the stats (0 Speed .. 4 Wit) worth 1100 for her blue spark's stars.
+    #[serde(default)]
+    pub stat_aims: Vec<usize>,
     /// Team Trials: how she gets the community's inherited unique (564 Escapades) when her
     /// parents above don't carry it.
     #[serde(default)]
@@ -281,6 +287,8 @@ impl App {
             setup,
             agenda,
             it_floor: None,
+            stat_floor: None,
+            stat_aims: run.stat_aims.clone(),
             must: run.must.clone(),
             nice: run.nice.clone(),
             legacies: if run.legacies == [0, 0] { Vec::new() } else { run.legacies.iter().zip(run.legacy_umas).map(|(id, uma)| (*id, if uma == 0 { inv.by_id(*id).map_or(0, |p| p.uma) } else { uma })).collect() },
@@ -319,10 +327,7 @@ impl App {
         if let Some((floor, race)) = &stamina_floor {
             stat_notes.push(format!("Stamina {floor} or more is the floor for {race}: below it she runs dry on longer tracks and loses placement and skill points."));
         }
-        stat_notes.push(format!(
-            "Aim for {}; Speed first, then the stamina floor, then Power and Wit (Wit makes skills fire and keeps her calm).",
-            plan.target.iter().enumerate().map(|(i, v)| format!("{} {v}", STATS[i])).collect::<Vec<_>>().join(", ")
-        ));
+        stat_notes.push("Train Speed first, then Stamina to its floor, then Power and Wit (Wit makes skills fire and keeps her calm).".into());
         // Her career objectives, and the G1s that fit her (A or better in distance and surface) for
         // fans: the plan's own distance first, then the others.
         let info = kb.umas.get(&trainee);
@@ -361,6 +366,8 @@ impl App {
         Brief {
             agenda: Vec::new(),
             it_floor,
+            stat_floor: stamina_floor.as_ref().map(|(f, _)| *f),
+            stat_aims: Vec::new(),
             must: Vec::new(),
             nice: Vec::new(),
             legacies: Vec::new(),
@@ -410,7 +417,7 @@ pub fn text(kb: &Knowledge, b: &Brief) -> String {
     out += &format!("- Parents: {}.\n- Scenario: {}.\n", b.parents, b.scenario);
     out += &format!("- Deck: {}; borrow {friend}.\n", deck.join(", "));
     out += &format!("- Skills to target: {}.\n", if skills.is_empty() { "none picked yet".to_string() } else { skills.join(", ") });
-    out += &format!("- Stats: {}\n", b.stat_notes.join(" "));
+    out += &format!("- Stats: aim for {}. {}\n", b.targets.iter().enumerate().map(|(i, v)| format!("{} {v}", STATS[i])).collect::<Vec<_>>().join(", "), b.stat_notes.join(" "));
     out += &format!("- Races: {}\n", b.races.join(" "));
     out += &format!("- Keep: {}\n", b.keep.join(" "));
     out += &format!("- Set up: {}\n", b.setup.join(" "));

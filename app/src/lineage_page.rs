@@ -510,6 +510,7 @@ impl App {
             };
             let mut right = |this: &Self, ui: &mut egui::Ui| {
                 label_row(ui, "STATS", |ui| {
+                    stat_table(ui, b);
                     for n in &b.stat_notes {
                         prose(ui, n, 12.5, p.text);
                     }
@@ -937,6 +938,33 @@ fn label_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
         });
     });
     ui.add_space(8.0);
+}
+
+/// The career's stat goals as a table: what to aim for, the least that keeps the run, and the
+/// training order (a runner), or which stats her blue spark wants (a parent).
+fn stat_table(ui: &mut egui::Ui, b: &Brief) {
+    let p = pal(ui);
+    let parent = b.p.is_some();
+    let order = ["1st", "2nd", "3rd, with Wit", "last", "3rd, with Power"];
+    egui::Grid::new(("stat-table", b.trainee, b.step)).spacing(vec2(22.0, 6.0)).min_col_width(56.0).show(ui, |ui| {
+        let head = |ui: &mut egui::Ui, t: &str| ui.add(egui::Label::new(RichText::new(t).size(11.5).color(p.weak)).extend());
+        head(ui, "Stat");
+        head(ui, "Aim for");
+        head(ui, if parent { "Why" } else { "Train order" });
+        ui.end_row();
+        for (i, name) in crate::parentage::STATS.iter().enumerate() {
+            ui.add(egui::Label::new(RichText::new(*name).size(13.0)).extend());
+            // A runner's stamina floor is the one number she must reach.
+            match b.stat_floor.filter(|_| i == 1 && !parent) {
+                Some(f) => ui.add(egui::Label::new(semibold(format!("{} minimum", crate::lineage_kit::thousands(f64::from(f.max(b.targets[i])))), 13.5).color(p.warn)).extend()),
+                None => ui.add(egui::Label::new(semibold(crate::lineage_kit::thousands(f64::from(b.targets[i])), 13.5)).extend()),
+            };
+            let note = if parent { if b.stat_aims.contains(&i) { "1,100 or more for a 2★ blue spark" } else { "" } } else { order[i] };
+            ui.add(egui::Label::new(RichText::new(note).size(12.5).color(p.weak)).extend());
+            ui.end_row();
+        }
+    });
+    ui.add_space(4.0);
 }
 
 /// Pills that wrap: each is measured first, and a row ends before one would overflow.
