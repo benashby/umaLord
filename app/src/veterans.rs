@@ -231,8 +231,21 @@ fn uma_name(kb: &Knowledge, card: u32) -> String {
 }
 
 fn scenario_name(kb: &Knowledge, id: u32) -> String {
-    // The game numbers scenarios in release order, as scenarios.json lists them.
-    kb.scenarios.as_ref().and_then(|s| s.scenarios.get(id.wrapping_sub(1) as usize)).map_or_else(|| format!("scenario {id}"), |s| s.name.clone())
+    scenario_of(id).and_then(|n| kb.scenarios.as_ref()?.scenarios.iter().find(|s| s.name == n).map(|s| s.name.clone())).unwrap_or_else(|| format!("scenario {id}"))
+}
+
+/// The game's scenario id, as a scenarios.json name. Not Global's release order: the ids follow
+/// JP's, so 3 is Grand Concert (JP Grand Live) and 4 Trackblazer (JP Climax). Checked
+/// 2026-10-29 against the scenario sparks real careers carry: every id-3 career holds "Our Grand
+/// Concert", every id-4 one "TS Climax Scenario".
+pub(crate) fn scenario_of(id: u32) -> Option<&'static str> {
+    match id {
+        1 => Some("URA Finale"),
+        2 => Some("Unity Cup"),
+        3 => Some("Grand Concert"),
+        4 => Some("Trackblazer"),
+        _ => None,
+    }
 }
 
 /// One ancestor in a cell: "Gold Ship [Red Strife]: Stamina 2★ · Long 1★ · Unique 1★, 4 white".
@@ -492,7 +505,7 @@ mod tests {
         let r = row(&kb, &v);
         assert!(r.starts_with("| Oguri Cap [Starlight Beat] #7 | Speed 3★ | Turf 2★ |"), "{r}");
         assert!(r.contains("Right-Handed ○ 1★") && r.contains("Gold Ship [") && r.contains("its parents: Mejiro McQueen ["), "{r}");
-        assert!(r.contains("A+ rank (12500) · Trackblazer · 3 G1 wins"), "{r}");
+        assert!(r.contains("A+ rank (12500) · Grand Concert · 3 G1 wins"), "{r}");
         let l = v.legacy(&kb);
         assert_eq!(l.parents[0].as_ref().map(|a| a.wins.len()), Some(1));
         assert!(l.parents[1].is_none(), "position 20 is empty");
