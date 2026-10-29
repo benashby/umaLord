@@ -61,7 +61,8 @@ impl App {
     pub(crate) fn lineage_page(&mut self, ui: &mut egui::Ui) {
         self.plan_poll(ui.ctx());
         // UMALORD_PLAN=create (or building, to screenshot the log mid-way) makes the view's plan
-        // on the first frame, as Create plan would.
+        // on the first frame, as Create plan would; with a saved plan, building shows the plan
+        // set aside while it's made again.
         if !self.lineage.p.env_done {
             self.lineage.p.env_done = true;
             if matches!(std::env::var("UMALORD_PLAN").as_deref(), Ok("create" | "building")) {
@@ -69,6 +70,10 @@ impl App {
                     let ctx = ui.ctx().clone();
                     self.plan_start(&ctx, which, Default::default());
                 }
+            }
+            // UMALORD_PLAN=replan opens Re-plan's confirmation on the saved plan.
+            if std::env::var("UMALORD_PLAN").as_deref() == Ok("replan") {
+                self.lineage.p.confirm_replan = self.view_which();
             }
         }
         egui::Panel::top("lineage_bar")
@@ -195,7 +200,8 @@ impl App {
     /// for, the steps, the 564 note, the team before and after and how it was chosen beside it.
     /// In one column the plan bar comes first and a step's card opens under its row.
     fn plan_view(&mut self, ui: &mut egui::Ui, which: crate::parentage::saved::Which) {
-        let Some(plan) = self.team_plans().get(which).cloned() else {
+        // While the plan is made again, the old one is set aside: only the build log shows.
+        let Some(plan) = self.team_plans().get(which).cloned().filter(|_| !self.plan_building(which)) else {
             self.plan_alone(ui, which);
             return;
         };

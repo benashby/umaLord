@@ -43,6 +43,8 @@ pub(crate) struct PlansUi {
     pub mark_key: Option<String>,
     pub editing: Option<Which>,
     pub confirm_reset: Option<Which>,
+    /// Re-plan asks first, as Reset does.
+    pub confirm_replan: Option<Which>,
     /// The UMALORD_PLAN screenshot hook ran.
     pub env_done: bool,
     /// Each plan's notices and when they were worked out: reading the account takes
@@ -97,6 +99,15 @@ pub(crate) fn when(stamp: &str) -> String {
 }
 
 /// How long making a plan takes, in words.
+/// "a, b and c".
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 fn how_long(which: Which) -> &'static str {
     match which {
         Which::Cm(_) => "a few seconds",
@@ -296,10 +307,7 @@ impl App {
                 self.save_team_plans();
                 self.toast_result(r);
             }
-            Act::Replan => {
-                let choices = self.team_plans().get(which).map(TeamPlan::choices_after).unwrap_or_default();
-                self.plan_start(ctx, which, choices);
-            }
+            Act::Replan => self.lineage.p.confirm_replan = Some(which),
             Act::PlanCm(id) => {
                 let i = self.kb.upcoming_cms(&crate::ui_util::today()).iter().position(|e| e.id == *id).unwrap_or(0);
                 self.lineage.cm = i;
@@ -766,16 +774,16 @@ impl App {
                             if !building
                                 && ui
                                     .add_enabled(!busy, egui::Button::new("↻ Re-plan"))
-                                    .on_hover_text(format!("Make the plan again from your account as it is now, keeping your choices and finished careers. Takes {}.", how_long(which)))
+                                    .on_hover_text(format!("Make the plan again from your account as it is now, keeping the careers you marked done and the runners you kept or left out. Asks first; takes {}.", how_long(which)))
                                     .on_disabled_hover_text("Another plan is being made; wait for it to finish.")
                                     .clicked()
                             {
-                                self.plan_start(&ctx, which, plan.choices_after());
+                                self.lineage.p.confirm_replan = Some(which);
                             }
                         }
                         _ => {
                             ui.menu_button("…", |ui| {
-                                if ui.button("Reset plan…").clicked() {
+                                if ui.button("Reset plan…").on_hover_text("Start over: a new plan without the careers marked done or your choices.").clicked() {
                                     self.lineage.p.confirm_reset = Some(which);
                                     ui.close();
                                 }
@@ -812,6 +820,7 @@ impl App {
             }
         });
         self.reset_dialog(&ctx);
+        self.replan_dialog(&ctx);
     }
 
     fn pending_bar(&mut self, ui: &mut egui::Ui, which: Which, plan: &TeamPlan) {
@@ -835,7 +844,7 @@ impl App {
             ui.horizontal(|ui| {
                 let busy = self.lineage.p.job.is_some();
                 if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, format!("↻ Re-plan with these changes ({})", how_long(which)), 13.0)).clicked() {
-                    self.plan_start(&ctx, which, plan.choices_after());
+                    self.lineage.p.confirm_replan = Some(which);
                 }
                 if ui.button("Discard changes").clicked() {
                     if let Some(pl) = self.team_plans().get_mut(which) {
@@ -956,6 +965,51 @@ impl App {
         }
     }
 
+    /// Re-plan's confirmation: what it keeps, and that the plan on screen is set aside while
+    /// the new one is made.
+    fn replan_dialog(&mut self, ctx: &egui::Context) {
+        let Some(which) = self.lineage.p.confirm_replan else { return };
+        let Some(plan) = self.team_plans().get(which).cloned() else {
+            self.lineage.p.confirm_replan = None;
+            return;
+        };
+        let (done, _) = plan.progress();
+        let mut keeps = Vec::new();
+        if done > 0 {
+            keeps.push(format!("the {done} career{} you marked done", if done == 1 { "" } else { "s" }));
+        }
+        let kept = plan.choices.pin.len() + plan.choices.tt_pin.len() + plan.choices.exclude.len();
+        if kept > 0 {
+            keeps.push(format!("the {kept} runner{} you kept or left out", if kept == 1 { "" } else { "s" }));
+        }
+        if !plan.pending.is_empty() {
+            keeps.push(format!("your {} edit{} waiting", plan.pending.len(), if plan.pending.len() == 1 { "" } else { "s" }));
+        }
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::unique("lineage_replan")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.label(semibold(format!("Re-plan the {} plan?", label(which)), size::LG));
+            ui.add_space(6.0);
+            let keeps = if keeps.is_empty() { " It keeps what you mark done and choose; there's nothing yet.".to_string() } else { format!(" It keeps {}.", join_and(&keeps)) };
+            prose(ui, &format!("This makes the plan again from your account as it is now ({}).{keeps} The current plan is set aside while the new one is made, and a copy is kept with the past plans.", how_long(which)), 13.5, pal(ui).text);
+            ui.add_space(4.0);
+            prose(ui, "To start over without what you've marked and chosen, use Reset plan in the … menu instead.", 12.5, pal(ui).weak);
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Keep the plan").clicked() {
+                    close = true;
+                }
+                if ui.add(crate::ui_util::primary_button(ui, "↻ Re-plan", 14.0)).clicked() {
+                    self.plan_start(ctx, which, plan.choices_after());
+                    close = true;
+                }
+            });
+        });
+        if close || modal.should_close() {
+            self.lineage.p.confirm_replan = None;
+        }
+    }
+
     fn reset_dialog(&mut self, ctx: &egui::Context) {
         let Some(which) = self.lineage.p.confirm_reset else { return };
         let mut close = false;
@@ -963,7 +1017,9 @@ impl App {
             ui.set_max_width(440.0);
             ui.label(semibold(format!("Reset the {} plan?", label(which)), size::LG));
             ui.add_space(6.0);
-            prose(ui, &format!("This throws the plan away, with the careers marked done and the edits waiting, and makes a new one from your account as it is now ({}). A copy is kept with the past plans.", how_long(which)), 13.5, pal(ui).text);
+            prose(ui, &format!("This throws the plan away, with the careers marked done, the runners you kept or left out, and the edits waiting, and makes a new one from your account as it is now ({}). A copy is kept with the past plans.", how_long(which)), 13.5, pal(ui).text);
+            ui.add_space(4.0);
+            prose(ui, "To keep what you've marked and chosen, use Re-plan instead.", 12.5, pal(ui).weak);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.button("Keep the plan").clicked() {
@@ -1004,7 +1060,7 @@ impl App {
                 });
             });
             if has_plan {
-                prose(ui, "Your saved plan stays in use until the new one is ready; Cancel keeps it as it is.", 12.5, p.weak);
+                prose(ui, "Your current plan is set aside while this runs; Cancel brings it back unchanged.", 12.5, p.weak);
             }
             let all: &[&str] = match which {
                 Which::Cm(_) => &crate::parentage::progress::CM_STAGES,
