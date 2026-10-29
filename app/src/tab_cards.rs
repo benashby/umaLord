@@ -1478,31 +1478,38 @@ impl App {
         let max_level = u32::from(crate::data::Rarity::from_id(id).unwrap_or(crate::data::Rarity::SSR).max_level(4));
 
         let explain = if level.is_some() { "What the card adds to training. Green numbers in the last column are what you'd gain by maxing it." } else { "What the card adds to training, fully limit broken (MLB)." };
+        // Rows with something at either level: (name, yours, MLB).
+        let rows: Vec<(String, Option<i32>, Option<i32>)> = info
+            .effects
+            .iter()
+            .map(|e| (e.name.clone(), level.and_then(|l| effect_at(&e.points, l)), effect_at(&e.points, max_level)))
+            .filter(|(_, now, max)| now.unwrap_or(0) != 0 || max.unwrap_or(0) != 0)
+            .collect();
         card_explained(ui, "Support effects", explain, |ui| {
-            egui::Grid::new(("card_effects", id)).num_columns(3).striped(true).spacing([18.0, 5.0]).show(ui, |ui| {
-                ui.label(RichText::new("Effect").color(p.weak));
-                if let Some(level) = level {
-                    ui.label(RichText::new(format!("Yours · Lv {level}")).color(p.weak));
-                }
-                ui.label(RichText::new(format!("MLB · Lv {max_level}")).color(p.weak));
-                ui.end_row();
-                for e in &info.effects {
-                    let now = level.and_then(|l| effect_at(&e.points, l));
-                    let max = effect_at(&e.points, max_level);
-                    if now.unwrap_or(0) == 0 && max.unwrap_or(0) == 0 {
-                        continue;
+            // The table fills the card: two halves side by side when there's room, else one.
+            let w = ui.available_width();
+            let gap = 48.0;
+            // Halves only when each half still fits the longest names (about 165 px, "Initial Friendship Gauge") whole.
+            let need = EFFECT_NAME_W + effect_values_w(level);
+            let halves = w >= 2.0 * need + gap && rows.len() > 4;
+            if halves {
+                let mid = rows.len().div_ceil(2);
+                let col = (w - gap) / 2.0;
+                let r = ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (k, part) in [&rows[..mid], &rows[mid..]].into_iter().enumerate() {
+                        ui.allocate_ui_with_layout(vec2(col, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_width(col);
+                            effects_grid(ui, (id, k), part, level, max_level, col);
+                        });
                     }
-                    ui.label(&e.name);
-                    let max_text = max.map_or("—".to_string(), |v| v.to_string());
-                    if level.is_some() {
-                        ui.label(semibold(now.map_or("—".to_string(), |v| v.to_string()), 14.0));
-                        ui.label(if max != now { semibold(max_text, 14.0).color(pal(ui).good) } else { RichText::new(max_text).color(p.weak) });
-                    } else {
-                        ui.label(semibold(max_text, 14.0));
-                    }
-                    ui.end_row();
-                }
-            });
+                });
+                // A faint rule between the halves, so a row doesn't read across both.
+                let x = r.response.rect.left() + col + gap / 2.0;
+                ui.painter().vline(x, r.response.rect.y_range(), egui::Stroke::new(1.0, p.border));
+            } else {
+                effects_grid(ui, (id, 0), &rows, level, max_level, w);
+            }
         });
 
         if let Some(u) = &info.unique {
@@ -1569,6 +1576,59 @@ impl App {
             });
         }
     }
+}
+
+
+const EFFECT_NAME_W: f32 = 175.0;
+const EFFECT_VAL_W: f32 = 92.0;
+
+/// The width a support-effects table's value columns take (with their spacing).
+fn effect_values_w(level: Option<u32>) -> f32 {
+    (if level.is_some() { 2.0 } else { 1.0 }) * (EFFECT_VAL_W + 12.0) + 8.0
+}
+
+/// One support-effects table `width` wide: the effect's name takes what the value columns leave.
+fn effects_grid(ui: &mut egui::Ui, salt: (u32, usize), rows: &[(String, Option<i32>, Option<i32>)], level: Option<u32>, max_level: u32, width: f32) {
+    let p = pal(ui);
+    let (val_w, spacing) = (EFFECT_VAL_W, 12.0);
+    let cols = if level.is_some() { 2.0 } else { 1.0 };
+    let name_w = (width - effect_values_w(level)).max(120.0);
+    let left = |ui: &mut egui::Ui, h: f32, text: RichText, hover: Option<&str>| {
+        ui.allocate_ui_with_layout(vec2(name_w, h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_width(name_w);
+            let r = ui.add(egui::Label::new(text).truncate());
+            if let Some(h) = hover {
+                r.on_hover_text(h);
+            }
+        });
+    };
+    let dash = |v: Option<i32>| v.map_or("—".to_string(), |v| v.to_string());
+    // Numbers line up on their last digit.
+    let right = |ui: &mut egui::Ui, h: f32, text: RichText| {
+        ui.allocate_ui_with_layout(vec2(val_w, h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.set_width(val_w);
+            ui.label(text);
+        });
+    };
+    egui::Grid::new(("card_effects", salt)).num_columns(1 + cols as usize).striped(true).spacing([spacing, 5.0]).show(ui, |ui| {
+        left(ui, 18.0, RichText::new("Effect").color(p.weak), None);
+        if let Some(level) = level {
+            right(ui, 18.0, RichText::new(format!("Yours · Lv {level}")).color(p.weak));
+        }
+        right(ui, 18.0, RichText::new(format!("MLB · Lv {max_level}")).color(p.weak));
+        ui.end_row();
+        for (name, now, max) in rows {
+            left(ui, 20.0, RichText::new(name.as_str()), Some(name.as_str()));
+            if level.is_some() {
+                right(ui, 20.0, semibold(dash(*now), 14.0));
+                let max_text = if max != now { semibold(dash(*max), 14.0).color(pal(ui).good) } else { RichText::new(dash(*max)).color(p.weak) };
+                right(ui, 20.0, max_text);
+            } else {
+                right(ui, 20.0, semibold(dash(*max), 14.0));
+            }
+            ui.end_row();
+        }
+    });
 }
 
 /// A quick action on a card tile.
