@@ -300,7 +300,7 @@ impl App {
         plan.map(|p| p.notices(&self.kb, &vets, &now, next.as_ref().map(|(i, n)| (*i, n.as_str())))).unwrap_or_default()
     }
 
-    fn notice_act(&mut self, ctx: &egui::Context, which: Which, n: &Notice) {
+    fn notice_act(&mut self, which: Which, n: &Notice) {
         match &n.act {
             Act::MarkDone { key, vet } => {
                 let r = self.team_plans().mark_done(which, key, Some(*vet), &stamp());
@@ -326,7 +326,6 @@ impl App {
     /// A notice as an amber box with its action and Not now.
     fn notice_box(&mut self, ui: &mut egui::Ui, which: Which, n: &Notice) {
         let p = pal(ui);
-        let ctx = ui.ctx().clone();
         amber_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());
             prose(ui, &format!("⚠ {}", n.text), 13.0, p.text);
@@ -338,7 +337,7 @@ impl App {
                 };
                 let busy = self.lineage.p.job.is_some() && n.act == Act::Replan;
                 if ui.add_enabled(!busy, crate::ui_util::primary_button(ui, act, 13.0)).on_disabled_hover_text("A plan is being made; wait for it to finish.").clicked() {
-                    self.notice_act(&ctx, which, n);
+                    self.notice_act(which, n);
                 }
                 if ui.button("Not now").clicked() {
                     self.dismiss(which, &n.id);
@@ -825,7 +824,6 @@ impl App {
 
     fn pending_bar(&mut self, ui: &mut egui::Ui, which: Which, plan: &TeamPlan) {
         let p = pal(ui);
-        let ctx = ui.ctx().clone();
         let lines: Vec<String> = plan.pending.iter().map(|e| crate::lineage_page::capitalize(&e.describe(&self.kb))).collect();
         amber_frame().show(ui, |ui| {
             ui.set_width(ui.available_width());

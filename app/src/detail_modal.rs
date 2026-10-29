@@ -18,6 +18,8 @@ pub(crate) enum Detail {
 #[derive(Clone)]
 pub(crate) struct Finished {
     id: u64,
+    /// The outfit she ran in: veterans of another outfit of hers are listed apart.
+    outfit: u32,
     rank: String,
     sparks: Vec<(crate::lineage_kit::Spark, String, u8)>,
     whites: usize,
@@ -93,7 +95,8 @@ impl App {
         self.details.push(Open { what, context, finished });
     }
 
-    /// Her finished umas (any outfit of her character), best rank first.
+    /// Her veterans in any outfit of her character, best rank first; the pop-up splits this
+    /// outfit's from the others'.
     fn finished_of(&self, outfit: u32) -> Vec<Finished> {
         let chara = outfit / 100;
         let mut v: Vec<_> = self.veterans().into_iter().filter(|v| v.card_id / 100 == chara).collect();
@@ -115,7 +118,7 @@ impl App {
                     };
                     sparks.push((kind, s.name.clone(), s.stars));
                 }
-                Finished { id: v.trained_chara_id, rank: v.rank_label(), sparks, whites }
+                Finished { id: v.trained_chara_id, outfit: v.card_id, rank: v.rank_label(), sparks, whites }
             })
             .collect()
     }
@@ -325,24 +328,27 @@ impl App {
     fn uma_body(&mut self, ui: &mut egui::Ui, outfit: u32, finished: &[Finished], glance: Glance) {
         let p = pal(ui);
         let potential = self.roster.umas.iter().find(|u| u.id == outfit).map(|u| u.potential);
-        crate::ui_util::card_explained(ui, "Your finished umas of her", "Careers of her you've finished: the parents you can breed from. Import them in Settings → Profile.", |ui| {
-            if finished.is_empty() {
-                ui.label(RichText::new("You haven't finished her yet.").color(p.weak));
+        // The game's own word: finished careers go to the Veteran List, and become parents.
+        let (this, other): (Vec<&Finished>, Vec<&Finished>) = finished.iter().partition(|f| f.outfit == outfit);
+        let owned = self.roster.umas.iter().any(|u| u.id == outfit);
+        crate::ui_util::card_explained(ui, "Your veterans", "Her finished careers on your Veteran List: parents you can breed other umas from. Import them in Settings → Profile.", |ui| {
+            if this.is_empty() {
+                let none = if owned { "None in this outfit yet." } else { "None yet: you don't have this outfit." };
+                ui.label(RichText::new(none).color(p.weak));
             }
-            for f in finished.iter().take(6) {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(semibold(format!("#{}", f.id), size::BODY));
-                    ui.label(RichText::new(&f.rank).size(size::SM).color(p.weak)).on_hover_text("Her rank when she finished: G is lowest, then up through A, S and SS to UG.");
-                    for (kind, name, stars) in &f.sparks {
-                        crate::lineage_kit::spark_chip(ui, *kind, name, *stars, None, false, true);
-                    }
-                    if f.whites > 0 {
-                        ui.label(RichText::new(format!("+{} white spark{}", f.whites, if f.whites == 1 { "" } else { "s" })).size(size::SM).color(p.weak));
-                    }
-                });
-            }
-            if finished.len() > 6 {
-                ui.label(RichText::new(format!("And {} more.", finished.len() - 6)).size(size::SM).color(p.weak));
+            self.veteran_rows(ui, &this);
+            // Her other outfits' veterans: the same character, so the same affinity as a parent.
+            let mut outfits: Vec<u32> = other.iter().map(|f| f.outfit).collect();
+            outfits.sort_unstable();
+            outfits.dedup();
+            for o in outfits {
+                let rows: Vec<&Finished> = other.iter().copied().filter(|f| f.outfit == o).collect();
+                let title = crate::parentage::uma_name(&self.kb, o);
+                let title = title.split_once(" [").map_or(title.clone(), |(_, t)| format!("[{t}"));
+                ui.add_space(6.0);
+                ui.label(semibold(format!("Veterans of her other outfit, {title}:"), size::SM).color(p.weak))
+                    .on_hover_text("The same character, so as a parent she brings the same affinity; her sparks are her own.");
+                self.veteran_rows(ui, &rows);
             }
         });
         // Her support cards: a click opens one on top, with ← Back.
@@ -360,6 +366,26 @@ impl App {
             });
         }
         self.uma_sections(ui, outfit, potential, !glance.aptitudes, !glance.stats);
+    }
+
+    /// Veteran rows: id, rank, blue, pink and green sparks, and how many whites.
+    fn veteran_rows(&self, ui: &mut egui::Ui, rows: &[&Finished]) {
+        let p = pal(ui);
+        for f in rows.iter().take(6) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(semibold(format!("#{}", f.id), size::BODY));
+                ui.label(RichText::new(&f.rank).size(size::SM).color(p.weak)).on_hover_text("Her rank when she finished: G is lowest, then up through A, S and SS to UG.");
+                for (kind, name, stars) in &f.sparks {
+                    crate::lineage_kit::spark_chip(ui, *kind, name, *stars, None, false, true);
+                }
+                if f.whites > 0 {
+                    ui.label(RichText::new(format!("+{} white spark{}", f.whites, if f.whites == 1 { "" } else { "s" })).size(size::SM).color(p.weak));
+                }
+            });
+        }
+        if rows.len() > 6 {
+            ui.label(RichText::new(format!("And {} more.", rows.len() - 6)).size(size::SM).color(p.weak));
+        }
     }
 
     /// The buttons under the pop-up; true when one of them leaves it.

@@ -619,7 +619,8 @@ impl App {
             let what_for = match (b.replaces, own) {
                 (Some(old), _) => format!("Replace {old_name} in {race}: {old_name}'s unique skill fires unreliably.", old_name = super::short_name(&self.kb, old)),
                 (None, false) => parent_for(&self.kb, b, runner, Some(&race)),
-                (None, true) if vets.iter().any(|v| crate::affinity::chara(v.card_id) == crate::affinity::chara(b.trainee)) => format!("Run her again for {race}: she scores lowest on the team, so a better run raises it most."),
+                // "Again" only when she's finished in this very outfit; another outfit is another career.
+                (None, true) if vets.iter().any(|v| v.card_id == b.trainee) => format!("Run her again for {race}: she scores lowest on the team, so a better run raises it most."),
                 (None, true) => format!("Train her first for {race}: she scores lowest on the team, so her career raises it most."),
             };
             careers.push(Career { key, label: tt_label(&self.kb, b, &race), brief: b.clone(), own, race: Some(race.clone()), what_for, usually: usually(if own { None } else { b.p }), ..Default::default() });
