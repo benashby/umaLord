@@ -31,6 +31,34 @@ pub(crate) struct Open {
     finished: Vec<Finished>,
 }
 
+/// Where her full-body art will be, until the picture is ready: a soft glow that slowly
+/// breathes, with a small spinner in it and one quiet word.
+fn art_loading(ui: &egui::Ui, rect: egui::Rect) {
+    let p = pal(ui);
+    let t = ui.input(|i| i.time) as f32;
+    let breathe = 0.5 + 0.5 * (t * 2.0).sin();
+    let c = rect.center() - vec2(0.0, rect.height() * 0.06);
+    // Many faint stacked ellipses blend into a smooth radial glow, brightest at the middle.
+    // The outer layers are the faintest, so the glow fades to nothing at its edge.
+    let steps = 32;
+    for i in 0..steps {
+        let f = i as f32 / steps as f32;
+        let k = 1.0 - f * 0.9;
+        let r = vec2(rect.width() * 0.5 * k, rect.height() * 0.3 * k);
+        ui.painter().add(egui::Shape::ellipse_filled(c, r, p.accent.gamma_multiply((0.002 + 0.01 * f) * (0.55 + 0.9 * breathe))));
+    }
+    // A short arc going round, as egui's spinner draws.
+    let r = 10.0;
+    let start = t * 4.0;
+    let pts: Vec<egui::Pos2> = (0..=24).map(|i| {
+        let a = start + i as f32 / 24.0 * std::f32::consts::PI * 1.4;
+        c + r * vec2(a.cos(), a.sin())
+    }).collect();
+    ui.painter().add(egui::Shape::line(pts, egui::Stroke::new(2.0, p.accent.gamma_multiply(0.85))));
+    ui.painter().text(c + vec2(0.0, r + 14.0), egui::Align2::CENTER_CENTER, "Loading…", egui::FontId::proportional(11.5), p.weak);
+    ui.ctx().request_repaint();
+}
+
 /// What the uma header shows beside her art, so the body leaves it out.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Glance {
@@ -217,33 +245,45 @@ impl App {
         let s = (160.0 * art).max(80.0);
         // Her full-body render once it's downloaded (a short window keeps the round icon, so the
         // body has room); the render's sides are empty, so only its middle half is drawn.
-        let full = self.art_uri("umas-full", outfit).filter(|_| art >= 0.6);
+        // Her full-body art takes its own space while it downloads or loads from the cache (a
+        // quiet loading animation there, never the icon first); a failed download falls back to
+        // the round icon. UMALORD_ART=loading holds the animation for screenshots.
+        let ready = self.art_uri("umas-full", outfit);
+        let coming = self.art_coming(crate::tab_cards::Art::Full, outfit) || std::env::var("UMALORD_ART").as_deref() == Ok("loading");
+        let slot = art >= 0.6 && (ready.is_some() || coming);
         // Her grades and stats join the header only when the window is tall enough to keep the
         // body's room; otherwise they stay in the body.
         let tall = ui.ctx().content_rect().height();
-        let glance = Glance { aptitudes: full.is_some(), stats: full.is_some() && tall >= 760.0 };
+        let glance = Glance { aptitudes: slot, stats: slot && tall >= 760.0 };
         ui.horizontal_top(|ui| {
-            match (full, self.art_uri("umas", outfit)) {
-                (Some(uri), _) => {
-                    let h = 400.0 * art;
-                    // Her box takes the render's own shape (768×1024 for all of them today), cut to
-                    // the middle half, so she's never stretched whatever the window.
-                    let crop = egui::Rect::from_min_max(egui::pos2(0.24, 0.05), egui::pos2(0.76, 0.97));
-                    let image = egui::Image::new(uri);
-                    let px = image.load_for_size(ui.ctx(), vec2(768.0, 1024.0)).ok().and_then(|t| t.size()).unwrap_or(vec2(768.0, 1024.0));
-                    let aspect = (px.x * crop.width()) / (px.y * crop.height());
-                    let (rect, _) = ui.allocate_exact_size(vec2(h * aspect, h), egui::Sense::hover());
-                    // A soft floor shadow under her feet: three stacked ellipses fake a soft edge.
-                    let floor = rect.center_bottom() - vec2(0.0, h * 0.045);
-                    let dark = ui.visuals().dark_mode;
-                    for (k, a) in [(1.0, 30), (0.75, 30), (0.5, 35)] {
-                        let a = if dark { a * 2 } else { a / 2 };
-                        ui.painter().add(egui::Shape::ellipse_filled(floor, vec2(rect.width() * 0.36 * k, h * 0.02 * k), egui::Color32::from_black_alpha(a)));
+            if slot {
+                let h = 400.0 * art;
+                // Her box takes the render's own shape (768×1024 for all of them today), cut to
+                // the middle half, so she's never stretched whatever the window.
+                let crop = egui::Rect::from_min_max(egui::pos2(0.24, 0.05), egui::pos2(0.76, 0.97));
+                let image = ready.filter(|_| std::env::var("UMALORD_ART").as_deref() != Ok("loading")).map(egui::Image::new);
+                let poll = image.as_ref().and_then(|i| i.load_for_size(ui.ctx(), vec2(768.0, 1024.0)).ok());
+                let px = poll.as_ref().and_then(|t| t.size()).unwrap_or(vec2(768.0, 1024.0));
+                let aspect = (px.x * crop.width()) / (px.y * crop.height());
+                let (rect, _) = ui.allocate_exact_size(vec2(h * aspect, h), egui::Sense::hover());
+                match (image, poll) {
+                    (Some(image), Some(egui::load::TexturePoll::Ready { .. })) => {
+                        // A soft floor shadow under her feet: many faint ellipses blend smoothly.
+                        let floor = rect.center_bottom() - vec2(0.0, h * 0.045);
+                        let a = if ui.visuals().dark_mode { 9 } else { 4 };
+                        for i in 0..12 {
+                            let k = 1.0 - i as f32 / 12.0 * 0.7;
+                            ui.painter().add(egui::Shape::ellipse_filled(floor, vec2(rect.width() * 0.36 * k, h * 0.02 * k), egui::Color32::from_black_alpha(a)));
+                        }
+                        crate::ui_util::paint_cover(ui, image, rect, crop);
                     }
-                    crate::ui_util::paint_cover(ui, image, rect, crop);
+                    _ => art_loading(ui, rect),
                 }
-                (None, Some(uri)) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(s, s)).corner_radius(CornerRadius::same((s / 2.0) as u8))),
-                (None, None) => _ = ui.allocate_exact_size(vec2(s, s), egui::Sense::hover()),
+            } else {
+                match self.art_uri("umas", outfit) {
+                    Some(uri) => _ = ui.add(egui::Image::new(uri).fit_to_exact_size(vec2(s, s)).corner_radius(CornerRadius::same((s / 2.0) as u8))),
+                    None => _ = ui.allocate_exact_size(vec2(s, s), egui::Sense::hover()),
+                }
             }
             ui.add_space(8.0);
             ui.vertical(|ui| {

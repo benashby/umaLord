@@ -174,6 +174,8 @@ pub(crate) struct ArtQueue {
     pending: VecDeque<(Art, u32)>,
     seen: HashSet<(Art, u32)>,
     running: Vec<mpsc::Receiver<(Art, u32, bool)>>,
+    /// Downloads that failed this session, so a picture stops showing as loading.
+    failed: HashSet<(Art, u32)>,
     /// The card just saved: say so if its art fails.
     watch: Option<u32>,
     /// The launch sweep has been queued.
@@ -1317,6 +1319,11 @@ impl App {
         }
     }
 
+    /// Whether a picture is still on its way: queued or downloading, not yet failed.
+    pub(crate) fn art_coming(&self, kind: Art, id: u32) -> bool {
+        self.cards.art.seen.contains(&(kind, id)) && !self.cards.art.failed.contains(&(kind, id))
+    }
+
     /// Once per launch, when fetching is allowed (Settings → Data and updates): queue the art of
     /// every released uma and card the knowledge data has and the app doesn't, so nothing shows
     /// as a placeholder once a release reaches the data.
@@ -1353,7 +1360,10 @@ impl App {
                     Art::Uma => self.uma_art.insert(id),
                     Art::Full => self.full_art.insert(id),
                 };
-            } else if kind == Art::Card && self.cards.art.watch == Some(id) {
+            } else if {
+                self.cards.art.failed.insert((kind, id));
+                kind == Art::Card && self.cards.art.watch == Some(id)
+            } {
                 self.toast("Saved, but the card art couldn't be downloaded; it shows as a placeholder.", crate::ui_util::ToastKind::Error);
             }
             if kind == Art::Card && self.cards.art.watch == Some(id) {
