@@ -586,6 +586,7 @@ impl App {
         ));
         let team = self.tt_team(200, &TtPins { pin: choices.tt_pin.clone(), exclude: choices.exclude.clone() })?;
         let vets = self.veterans();
+        let meta = self.tt_meta();
         self.stage("Writing each career's brief")?;
         let mut careers: Vec<Career> = Vec::new();
         let first = self.tt_next(&team, &inv);
@@ -612,7 +613,7 @@ impl App {
             // A replacement's parents are her best pair, which doesn't carry the inherited unique.
             let meta = self.tt_meta();
             if own && b.replaces.is_some() && meta.inherit.uma > 0 && crate::affinity::chara(meta.inherit.uma) != crate::affinity::chara(b.trainee) {
-                b.inherit = Some(format!("For {}: borrow a friend's Summer Gold Ship as one parent in place of one of these; her targets should still start at A.", meta.inherit.skill));
+                self.borrow_for_inherit(&mut b, &meta, &race, &inv);
             }
             let b = &b;
             let what_for = match (b.replaces, own) {
@@ -655,7 +656,9 @@ impl App {
             let mut b = self.runner_brief(format!("Her own career for Team Trials ({race})."), &s.plan, Some((s.plan.target[1], race.to_string())), parents);
             b.legacies = super::brief::legacies_of(s.parents.now.as_ref(), &inv);
             (b.friend_why, b.friend_alts) = self.friend_picks(&s.plan);
-            b.inherit = s.notes.iter().find(|n| n.contains("Summer Gold Ship")).cloned();
+            if s.notes.iter().any(|n| n.contains("borrow a friend's")) {
+                self.borrow_for_inherit(&mut b, &meta, race, &inv);
+            }
             // Where her character races today, if anywhere: here, or another race.
             let chara = crate::affinity::chara(s.trainee);
             let now_in = team.rows.iter().find(|r| r.today.iter().any(|t| crate::affinity::chara(t.0.outfit) == chara)).map(|r| r.name);
@@ -693,6 +696,48 @@ impl App {
             .collect();
         Ok(TeamPlan { which: Which::Tt, made: stamp(), basis, built: Built::Tt { team, next: first, lengths }, careers, log: Vec::new(), choices: choices.clone(), pending: Vec::new(), dismissed: Vec::new(), ceiling: Some(ceiling), tried })
     }
+}
+
+impl App {
+    /// A Team Trials runner whose parents don't carry the community's inherited unique: borrow
+    /// a friend's uma whose unique it is, beside whichever of the player's own finished umas
+    /// still starts her race at A (her parents become that one, and the borrow).
+    fn borrow_for_inherit(&self, b: &mut Brief, meta: &super::tt::TtMeta, race: &str, inv: &Inventory) {
+        let (surface, distance) = super::tt::race_grades(race);
+        let goal = super::Goal {
+            runner: b.trainee,
+            targets: vec![usize::from(surface == crate::knowledge::Surface::Dirt), 2 + crate::knowledge::Distance::ALL.iter().position(|d| *d == distance).unwrap_or(1), 6 + b.style as usize],
+            ..Default::default()
+        };
+        let partner = self.inherit_partner(&goal, inv, meta.inherit.uma);
+        if let Some(p) = partner.and_then(|id| inv.by_id(id)) {
+            b.legacies = vec![(p.id, p.uma)];
+        }
+        b.borrow_parent = Some(meta.inherit.uma);
+        b.inherit = Some(inherit_text(&self.kb, meta, partner.is_some()));
+    }
+}
+
+/// The community's inherited unique for a Team Trials runner, explained where it's asked for:
+/// a headline, then (after a newline) what the skill is, why it needs that parent, and how.
+fn inherit_text(kb: &Knowledge, meta: &super::tt::TtMeta, paired: bool) -> String {
+    let parent = uma_name(kb, meta.inherit.uma);
+    let unique = kb.umas.get(&meta.inherit.uma).and_then(|u| u.unique_skill);
+    // The inherited copy of a unique is its 9xxxxx id, weaker than her own.
+    let does = unique.and_then(|u| kb.skills.get(&(u + 800_000))).map(|s| {
+        let first = s.desc.split(". ").next().unwrap_or(&s.desc).trim_end_matches('.');
+        format!(" Inherited, it does this: {}.", first.to_lowercase())
+    });
+    let keep = if paired {
+        "The parent above is yours; with her, the race's surface, distance and style still start at A."
+    } else {
+        "None of your finished umas keeps her race's surface, distance and style at A beside her, so the other parent needs the pink sparks for them."
+    };
+    format!(
+        "Why borrow {parent}: for {skill}\n{skill} is {parent}'s unique skill.{} Team Trials players give it to every runner: showing it and the gold skill it sets off both score points. A runner only gets another uma's unique by inheriting it from a parent, so one of her two parents must be {parent}, and you don't own her. {keep}",
+        does.unwrap_or_default(),
+        skill = meta.inherit.skill
+    )
 }
 
 /// The ceiling stage's last line: what it found.

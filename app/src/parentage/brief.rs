@@ -77,6 +77,10 @@ pub struct Brief {
     /// skill shop helper at the end of her career.
     #[serde(default)]
     pub plan: Option<Plan>,
+    /// A parent to borrow from a friend in place of one of `legacies` (outfit): Team Trials'
+    /// inherited unique. `legacies` then holds the player's own parent to keep beside her.
+    #[serde(default)]
+    pub borrow_parent: Option<u32>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -291,6 +295,7 @@ impl App {
             objectives: Vec::new(),
             extra_races: Vec::new(),
             plan: None,
+            borrow_parent: None,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -370,6 +375,7 @@ impl App {
             objectives,
             extra_races,
             plan: Some(plan.clone()),
+            borrow_parent: None,
             mode: "Manual career".into(),
             setup,
             why,

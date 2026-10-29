@@ -292,6 +292,18 @@ impl App {
         std::mem::replace(&mut self.planner.plan, saved)
     }
 
+    /// With a friend's `uma` (carrying her unique) borrowed as one parent, which of the player's
+    /// own finished umas, as the other, still starts every target of `goal` at A. The goal's
+    /// green is the unique wanted.
+    pub(crate) fn inherit_partner(&self, goal: &Goal, inv: &Inventory, uma: u32) -> Option<u64> {
+        let mut goal = goal.clone();
+        goal.green = Some(uma);
+        let mut inv2 = inv.clone();
+        let borrowed = inv2.borrow(&self.kb, &super::Borrow { uma, own: vec![super::green_spark(uma, 1)], parents: [(0, vec![]), (0, vec![])] });
+        let with_friend = super::jobs::propose(&self.kb, &goal, &inv2);
+        with_friend.now.as_ref().filter(|l| l.meets()).and_then(|l| l.legacies.iter().map(|i| &inv2.parents[*i]).find(|x| x.id != borrowed).map(|x| x.id))
+    }
+
     /// The meta file from the data folder, or the copy built in.
     pub(crate) fn tt_meta(&self) -> TtMeta {
         let path = self.root.as_ref().map(|r| r.join("knowledge/data/tt_meta.json"));
@@ -530,10 +542,7 @@ impl App {
                         // The community's way: borrow a friend's finished Summer Gold Ship as one
                         // parent; her green comes with her. Does one of the player's own finished
                         // umas still give the rest of the start?
-                        let mut inv2 = inv.clone();
-                        let borrowed = inv2.borrow(&self.kb, &super::Borrow { uma: g, own: vec![super::green_spark(g, 1)], parents: [(0, vec![]), (0, vec![])] });
-                        let with_friend = super::jobs::propose(&self.kb, &goal, &inv2);
-                        let partner = with_friend.now.as_ref().filter(|l| l.meets()).and_then(|l| l.legacies.iter().map(|i| &inv2.parents[*i]).find(|x| x.id != borrowed).map(|x| super::parent_name(&self.kb, x)));
+                        let partner = self.inherit_partner(&goal, inv, g).and_then(|id| inv.by_id(id)).map(|x| super::parent_name(&self.kb, x));
                         goal.green = None;
                         match partner {
                             Some(w) => s.notes.push(format!("For {}: borrow a friend's Summer Gold Ship as one parent and pair her with {w} instead of the parents below; every target still starts at A.", meta.inherit.skill)),

@@ -416,11 +416,34 @@ impl App {
                     if b.legacies.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&b.parents).size(13.0)).wrap());
                     } else {
-                        let items: Vec<Who> = b.legacies.iter().map(|(id, uma)| Who { uma: *uma, name: format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)), note: String::new(), note_color: p.weak, hover: Some(crate::lineage_steps::explain("vet").to_string()) }).collect();
+                        // Each parent says where she comes from: the player's own finished umas, or a
+                        // friend's to borrow.
+                        let mut items: Vec<Who> = b
+                            .legacies
+                            .iter()
+                            .map(|(id, uma)| {
+                                let borrowed = crate::parentage::is_borrowed(*id);
+                                Who {
+                                    uma: *uma,
+                                    name: if borrowed { crate::parentage::uma_name(&this.kb, *uma) } else { format!("#{id} {}", crate::parentage::uma_name(&this.kb, *uma)) },
+                                    note: if borrowed { "a friend's · borrow".into() } else { "yours · Veteran List".into() },
+                                    note_color: if borrowed { p.accent } else { p.weak },
+                                    hover: Some(if borrowed { "A friend's finished uma: pick her as a borrowed parent when the career starts.".to_string() } else { crate::lineage_steps::explain("vet").to_string() }),
+                                }
+                            })
+                            .collect();
+                        if let Some(u) = b.borrow_parent {
+                            items.push(Who { uma: u, name: crate::parentage::uma_name(&this.kb, u), note: "a friend's · borrow".into(), note_color: p.accent, hover: Some("A friend's finished uma: pick her as a borrowed parent when the career starts.".into()) });
+                        }
                         this.who_flow(ui, &items);
                     }
                     if let Some(n) = &b.inherit {
-                        ui.add(egui::Label::new(RichText::new(format!("⚠ {n}")).size(12.5).color(p.warn)).wrap());
+                        // A headline, then what it means (older plans have the headline only).
+                        let (head, body) = n.split_once('\n').unwrap_or((n.as_str(), ""));
+                        ui.add(egui::Label::new(semibold(format!("⚠ {head}"), 12.5).color(p.warn)).wrap());
+                        if !body.is_empty() {
+                            prose(ui, body, 12.5, p.weak);
+                        }
                     }
                 });
                 label_row(ui, "SCENARIO", |ui| {
