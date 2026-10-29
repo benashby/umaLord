@@ -159,7 +159,7 @@ the steps to plan a career, and the game words the app uses.
   Each view starts with the Next career card: who to train and why, the parents, scenario,
   deck and skills, and how to run it. Parent careers use Independent Training: copy the
   setup panel into the game and tick the skills as you enter them (the ticks are saved).
-  Runners are manual careers. "Start this career" fills in Career > Plan. On a wide window
+  Runners are manual careers. A runner's card lists her races: her objectives, then G1s that fit her for fans. At the end of her career, "Open the skill shop helper" opens Career > Plan with her plan in skill shop mode: enter her final stats, SP and the skills on offer, and it picks the best set. On a wide window
   the card sits beside the overview, and each side scrolls on its own.
 - Notes and files: read the notes, plans and logs. It isn't a tab any more: open it from
   Settings > Data and updates ("Browse notes and data files").

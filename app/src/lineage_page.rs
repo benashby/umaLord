@@ -314,7 +314,7 @@ impl App {
         });
     }
 
-    /// The Next career card: who and why with Start this career; How (Independent
+    /// The Next career card: who and why; How (Independent
     /// Training with its setup panel, or a manual career); then parents, scenario, deck and
     /// skills beside stats, races and keep-if; the odds strip last.
     pub(crate) fn next_card(&mut self, ui: &mut egui::Ui, b: &Brief) {
@@ -329,8 +329,7 @@ impl App {
         let wide = ui.available_width() >= 1100.0;
         egui::Frame::new().fill(p.surface).stroke(Stroke::new(1.5, p.accent)).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let narrow_card = ui.available_width() < 700.0;
-            let mut start = false;
+            let mut shop = false;
             if let Some(h) = head {
                 ui.label(semibold(&h.line, 13.0).color(p.accent));
                 ui.horizontal_wrapped(|ui| {
@@ -344,7 +343,7 @@ impl App {
             ui.horizontal_top(|ui| {
                 self.avatar(ui, b.trainee, 64.0);
                 // Leave the button its room: the text wraps before it.
-                let text_w = if narrow_card { ui.available_width() } else { (ui.available_width() - 190.0).max(200.0) };
+                let text_w = ui.available_width();
                 ui.allocate_ui_with_layout(vec2(text_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_max_width(text_w);
                     // A plan's step already says what kind of career it is and who it's for.
@@ -376,29 +375,7 @@ impl App {
                     ui.add(egui::Label::new(job).wrap()).on_hover_text(crate::lineage_steps::style_hint(b.style.label()).unwrap_or_default());
                     ui.label(RichText::new(&b.why).size(13.0).color(p.weak));
                 });
-                if !narrow_card {
-                    let btn_w = 170.0;
-                    ui.add_space((ui.available_width() - btn_w).max(0.0));
-                    ui.vertical(|ui| {
-                        if ui.add(egui::Button::new(RichText::new("📋 Start this career").color(p.on_accent)).fill(p.accent).min_size(vec2(btn_w, 30.0))).on_hover_text("Fills in Career → Plan with this card: trainee, style, scenario, deck with the borrowed card, and skills").clicked() {
-                            start = true;
-                        }
-                        ui.label(RichText::new("Prefills Career → Plan").size(11.5).color(p.weak));
-                    });
-                }
             });
-            if narrow_card {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("📋 Start this career").color(p.on_accent)).fill(p.accent).min_size(vec2(170.0, 30.0))).on_hover_text("Fills in Career → Plan with this card: trainee, style, scenario, deck with the borrowed card, and skills").clicked() {
-                        start = true;
-                    }
-                    ui.label(RichText::new("Prefills Career → Plan").size(11.5).color(p.weak));
-                });
-            }
-            if start {
-                self.start_career_from(b);
-            }
             ui.add_space(10.0);
             // How.
             label_row(ui, "HOW", |ui| {
@@ -464,12 +441,33 @@ impl App {
                     ui.label(RichText::new("In buying order: the first matter most.").size(12.0).color(p.weak));
                 });
             };
-            let right = |this: &Self, ui: &mut egui::Ui| {
+            let mut right = |this: &Self, ui: &mut egui::Ui| {
                 label_row(ui, "STATS", |ui| {
                     for n in &b.stat_notes {
                         prose(ui, n, 12.5, p.text);
                     }
                 });
+                // A runner's races: the objectives she must run, then G1s that fit her for fans.
+                if !b.objectives.is_empty() || !b.extra_races.is_empty() {
+                    label_row(ui, "RACES", |ui| {
+                        if !b.objectives.is_empty() {
+                            ui.label(RichText::new("Her objectives (the career ends if she misses one):").size(12.5).color(p.weak));
+                            for (when, race, goal) in &b.objectives {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(when).size(12.5).color(p.weak));
+                                    ui.label(semibold(race, 13.0));
+                                    ui.label(RichText::new(goal).size(12.5));
+                                });
+                            }
+                        }
+                        if !b.extra_races.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Extra G1s that fit her, for fans (on turns without a strong friendship training):").size(12.5).color(p.weak));
+                            let items: Vec<String> = b.extra_races.iter().map(|(n, d, g)| format!("{n} · {d} · {g}")).collect();
+                            pills(ui, &items, p.weak);
+                        }
+                    });
+                }
                 if !b.agenda.is_empty() {
                     label_row(ui, "G1S TO WIN", |ui| {
                         for ((name, grades, chance), (_, links)) in b.agenda.iter().zip(this.g1_links(b)) {
@@ -504,6 +502,15 @@ impl App {
                         ui.label(RichText::new("Close but short? Use the 30 TP spark reroll on that run before you settle.").size(12.0).color(p.weak));
                     }
                 });
+                // The Plan page's skill shop mode is what helps at the end of her career.
+                if b.plan.is_some() {
+                    label_row(ui, "AT THE END", |ui| {
+                        prose(ui, "At the skill shop, enter her final stats, SP and the skills on offer: the helper races the options and picks the best set for her course.", 12.5, p.text);
+                        if ui.button("Open the skill shop helper").on_hover_text("Career → Plan with her plan and its course, in skill shop mode").clicked() {
+                            shop = true;
+                        }
+                    });
+                }
             };
             if wide {
                 ui.columns(2, |cols| {
@@ -516,6 +523,9 @@ impl App {
             }
             if look_toggle {
                 self.lineage.look_for = if look_open { None } else { Some(look_key.clone()) };
+            }
+            if shop {
+                self.open_shop_helper(b);
             }
             // How races work, for when it's needed: collapsed, remembered.
             ui.separator();
@@ -635,15 +645,17 @@ impl App {
     }
 
     /// Fill Career → Plan from a brief and open it.
-    fn start_career_from(&mut self, b: &Brief) {
-        let mut plan = crate::tab_planner::Plan { trainee: Some(b.trainee), style: b.style, scenario: b.scenario.clone(), target: b.targets, skills: b.skills.clone(), friend: b.friend, friend_lb: 4, ..Default::default() };
-        for (slot, c) in plan.deck.iter_mut().zip(&b.deck) {
-            *slot = Some(*c);
-        }
+    /// The skill shop helper for a runner's career: Career → Plan with her plan as the planner
+    /// made it (course, targets, deck, skills) and skill shop mode on, her targets as the stats to
+    /// replace with her real ones.
+    fn open_shop_helper(&mut self, b: &Brief) {
+        let Some(mut plan) = b.plan.clone() else { return };
+        plan.shop.on = true;
+        plan.shop.stats = plan.target;
         self.planner.plan = plan;
         self.tab = crate::Tab::Career;
         self.career_tab = crate::CareerTab::Plan;
-        self.toast("Career → Plan filled in from the Next career card.", crate::ui_util::ToastKind::Info);
+        self.toast("Skill shop helper: replace the stats with hers, enter her SP and the skills on offer, then Auto-pick.", crate::ui_util::ToastKind::Info);
     }
 
     /// What to look for when borrowing a friend's support card: the card at MLB, why it's the

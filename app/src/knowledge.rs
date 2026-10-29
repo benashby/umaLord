@@ -200,6 +200,9 @@ pub struct Objective {
     pub goal: String,
     #[serde(default)]
     pub race_id: Option<u32>,
+    /// "Specific_Race", "Fan_Count", …
+    #[serde(default, rename = "type")]
+    pub kind: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]

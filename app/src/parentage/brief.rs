@@ -66,6 +66,17 @@ pub struct Brief {
     /// parents above don't carry it.
     #[serde(default)]
     pub inherit: Option<String>,
+    /// A runner's own career: her career objectives (when, race, goal), the race she must run.
+    #[serde(default)]
+    pub objectives: Vec<(String, String, String)>,
+    /// Extra G1s that fit her for fans (name, "1,600 m turf", her distance/surface grades),
+    /// the plan's distance first.
+    #[serde(default)]
+    pub extra_races: Vec<(String, String, String)>,
+    /// A runner's career plan as the planner made it (course, targets, deck, skills), for the
+    /// skill shop helper at the end of her career.
+    #[serde(default)]
+    pub plan: Option<Plan>,
 }
 
 /// Independent Training's win chance for a race, in percent (uma.guide, Independent Training):
@@ -105,6 +116,35 @@ fn fan_line(kb: &Knowledge, trainee: u32, scenario: &str) -> String {
     let (a, b, c) = if dirt { ("40,000", "60,000", "80,000") } else { ("60,000", "70,000", "120,000") };
     let bond = if scenario == "Unity Cup" { "" } else { " (with the Director's bond green, 60%)" };
     format!("Her unique levels up in the Senior year at {a} fans by Valentine's, {b} by Fan Appreciation{bond} and {c} by Christmas: run extra races only to reach those, on turns without a strong friendship training.")
+}
+
+/// A career objective in words: when, the race (its proper name, a debut's track, or a fan
+/// count), and the goal.
+fn objective(kb: &Knowledge, o: &crate::knowledge::Objective) -> (String, String, String) {
+    let cap = |s: &str| {
+        let mut c = s.chars();
+        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+    };
+    let months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    let when = cap(&o.when.split(' ').map(|w| if months.contains(&w) { cap(w) } else { w.to_string() }).collect::<Vec<_>>().join(" "));
+    if o.kind == "Fan_Count" || o.race.chars().all(|c| c.is_ascii_digit()) {
+        let fans = o.race.parse::<f64>().map_or(o.race.clone(), crate::lineage_kit::thousands);
+        return (when, format!("Reach {fans} fans"), String::new());
+    }
+    let race = match o.race_id.and_then(|id| kb.races.iter().find(|r| r.id == id)) {
+        Some(r) => r.name.clone(),
+        None => match o.race.split('-').collect::<Vec<_>>().as_slice() {
+            // "hanshin-turf-1200": a debut on that track.
+            [track, surface, metres] if metres.chars().all(|c| c.is_ascii_digit()) => format!("A race at {} ({surface} {} m)", cap(track), crate::lineage_kit::thousands(metres.parse().unwrap_or(0.0))),
+            _ => o.race.split(' ').map(cap).collect::<Vec<_>>().join(" "),
+        },
+    };
+    let goal = match o.goal.as_str() {
+        "Enter" => "run it".to_string(),
+        "None" | "" => String::new(),
+        g => g.to_lowercase(),
+    };
+    (when, race, goal)
 }
 
 const RACING: &str = "Don't run three races in a row if you can help it (a third risks her mood; a fourth costs stats).";
@@ -248,6 +288,9 @@ impl App {
             friend_why,
             friend_alts,
             inherit: None,
+            objectives: Vec::new(),
+            extra_races: Vec::new(),
+            plan: None,
             why: format!("Step {} of the parent plan for {}.", step + 1, uma_name(kb, goal.runner)),
             trainee: run.trainee,
             style,
@@ -275,6 +318,28 @@ impl App {
             "Aim for {}; Speed first, then the stamina floor, then Power and Wit (Wit makes skills fire and keeps her calm).",
             plan.target.iter().enumerate().map(|(i, v)| format!("{} {v}", STATS[i])).collect::<Vec<_>>().join(", ")
         ));
+        // Her career objectives, and the G1s that fit her (A or better in distance and surface) for
+        // fans: the plan's own distance first, then the others.
+        let info = kb.umas.get(&trainee);
+        let objectives: Vec<(String, String, String)> = info.map(|u| u.objectives.iter().map(|o| objective(kb, o)).collect()).unwrap_or_default();
+        let mut extra: Vec<(bool, String, String, String)> = Vec::new();
+        if let Some(u) = info {
+            let a = &u.aptitude;
+            // Career races only: ids under 5000 (above are events, scenario finals and matches).
+            for r in kb.races.iter().filter(|r| r.grade == "G1" && r.id < 5000) {
+                if objectives.iter().any(|o| o.1 == r.name) || extra.iter().any(|e| e.1 == r.name) {
+                    continue;
+                }
+                let surface = if r.surface == "Dirt" { crate::knowledge::Surface::Dirt } else { crate::knowledge::Surface::Turf };
+                let distance = crate::knowledge::Distance::of_metres(r.distance);
+                let (d, sf) = (a.distance(distance), a.surface(surface));
+                if grade_rank(d) >= 7 && grade_rank(sf) >= 7 {
+                    extra.push((distance == plan.distance && surface == plan.surface, r.name.clone(), format!("{} m {}", crate::lineage_kit::thousands(f64::from(r.distance)), r.surface.to_lowercase()), format!("{d}/{sf}")));
+                }
+            }
+        }
+        extra.sort_by_key(|e| !e.0);
+        let extra_races: Vec<(String, String, String)> = extra.into_iter().take(8).map(|e| (e.1, e.2, e.3)).collect();
         let mut races = vec![fan_line(kb, trainee, &plan.scenario)];
         if plan.scenario == "Grand Concert" {
             races.push("Grand Concert's races give no Performance Points: run her objective races and the fan races above, and train the rest.".into());
@@ -302,6 +367,9 @@ impl App {
             friend_why: None,
             friend_alts: Vec::new(),
             inherit: None,
+            objectives,
+            extra_races,
+            plan: Some(plan.clone()),
             mode: "Manual career".into(),
             setup,
             why,
